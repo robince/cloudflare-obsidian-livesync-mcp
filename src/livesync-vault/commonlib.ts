@@ -114,16 +114,33 @@ export class CommonlibFacade {
       children: [] as string[],
     };
     const db = this.manipulator.liveSyncLocalDB;
-    const result = expectedRevision
-      ? await db.putDBEntryWithLiveBaseRevision(note, expectedRevision)
-      : await db.putDBEntry(note);
-    if (!result || typeof result.rev !== 'string') return false;
-    return { revision: result.rev };
+    try {
+      const result = expectedRevision
+        ? await db.putDBEntryWithLiveBaseRevision(note, expectedRevision)
+        : await db.putDBEntry(note);
+      if (!result || typeof result.rev !== 'string') return false;
+      return { revision: result.rev };
+    } catch (error) {
+      if (isConflict(error)) return false;
+      throw error;
+    }
   }
 
-  async remove(path: string): Promise<boolean> {
+  async remove(path: string, expectedRevision: string): Promise<{ revision: string } | false> {
     await this.ready();
-    return this.manipulator.liveSyncLocalDB.deleteDBEntry(path as CommonlibPath);
+    const id = await this.manipulator.path2id(path as CommonlibPath);
+    try {
+      const current = await this.manipulator.liveSyncLocalDB.getRaw(id);
+      if (!current || current._rev !== expectedRevision) return false;
+      const tombstone = { ...current, deleted: true, mtime: Date.now() } as typeof current & { deleted: boolean; _deleted?: boolean };
+      delete tombstone._deleted;
+      const result = await this.manipulator.liveSyncLocalDB.putRaw(tombstone);
+      if (!result?.rev) return false;
+      return { revision: result.rev };
+    } catch (error) {
+      if (isConflict(error) || isMissing(error)) return false;
+      throw error;
+    }
   }
 
   async documentId(path: string): Promise<string> {
@@ -180,4 +197,12 @@ function noteDatatype(entry: { datatype?: unknown; type?: unknown }): string {
 
 function entryData(entry: LoadedEntry): string {
   return Array.isArray(entry.data) ? entry.data.join('') : entry.data;
+}
+
+function isConflict(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'status' in error && error.status === 409;
+}
+
+function isMissing(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'status' in error && error.status === 404;
 }

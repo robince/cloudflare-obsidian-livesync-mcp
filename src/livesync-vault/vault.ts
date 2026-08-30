@@ -140,6 +140,9 @@ export class LiveSyncVault {
     return this.withCommonlib(async (commonlib) => {
       const existing = await commonlib.inspect(parsed.data.path);
       if (!existing) return failure('not_found', 'File not found.');
+      if (existing.datatype !== 'plain') {
+        return failure('unsupported', 'Only plain Markdown notes can be updated.');
+      }
       const written = await commonlib.write(
         parsed.data.path,
         parsed.data.content,
@@ -167,9 +170,9 @@ export class LiveSyncVault {
       if (existing.revision !== parsed.data.expectedRevision) {
         return failure('conflict', 'The file was modified by another client.');
       }
-      const removed = await commonlib.remove(parsed.data.path);
-      if (!removed) return failure('internal', 'Could not delete the file.');
-      return success({ path: parsed.data.path, revision: existing.revision });
+      const removed = await commonlib.remove(parsed.data.path, parsed.data.expectedRevision);
+      if (!removed) return failure('conflict', 'The file was modified by another client.');
+      return success({ path: parsed.data.path, revision: removed.revision });
     });
   }
 
@@ -185,6 +188,8 @@ export class LiveSyncVault {
       if (source.revision !== parsed.data.expectedRevision) {
         return failure('conflict', 'The file was modified by another client.');
       }
+      const sizeError = contentTooLarge(source.content);
+      if (sizeError) return sizeError;
       const sourceId = await commonlib.documentId(parsed.data.from);
       const destId = await commonlib.documentId(parsed.data.to);
       const destination = await commonlib.inspect(parsed.data.to);
@@ -200,7 +205,7 @@ export class LiveSyncVault {
       );
       if (!written) return failure('conflict', 'Could not write the destination file.');
       if (sourceId !== destId) {
-        const removed = await commonlib.remove(parsed.data.from);
+        const removed = await commonlib.remove(parsed.data.from, parsed.data.expectedRevision);
         if (!removed) return failure('internal', 'Moved the file but could not remove the original path.');
       }
       return success({ from: parsed.data.from, to: parsed.data.to, revision: written.revision });
@@ -308,6 +313,7 @@ function errorCode(error: unknown): VaultErrorCode {
   }
   if (error && typeof error === 'object' && 'status' in error) {
     if (error.status === 404) return 'not_found';
+    if (error.status === 409) return 'conflict';
     if (error.status === 503) return 'unavailable';
   }
   const message = error instanceof Error ? error.message : '';

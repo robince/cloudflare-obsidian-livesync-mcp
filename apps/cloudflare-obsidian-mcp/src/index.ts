@@ -62,7 +62,10 @@ function providerFor(env: Env): OAuthProvider<Env> {
     clientIdMetadataDocumentEnabled: true,
     scopesSupported: [READ_SCOPE, WRITE_SCOPE],
     tokenExchangeCallback: ({ props }) => ({
-      accessTokenProps: { ...props, scopes: [READ_SCOPE, WRITE_SCOPE] },
+      accessTokenProps: {
+        ...props,
+        scopes: grantedScopes(props),
+      },
     }),
     resourceMetadata: {
       resource,
@@ -163,15 +166,19 @@ async function completeGithubAuthorization(request: Request, env: OAuthEnv): Pro
     if (!allowedGithubLogins(env.GITHUB_ALLOWED_LOGINS).has(login)) {
       return new Response('This GitHub account is not allowed.', { status: 403, headers: { 'set-cookie': clearCsrfCookie() } });
     }
+    const scopes = grantedScopes({ scopes: state.request.scope });
+    if (scopes.length === 0) {
+      return new Response('The vault:read or vault:write scope is required.', { status: 400 });
+    }
     const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
       request: state.request,
       userId: `github-${githubUser.id}`,
-      scope: [READ_SCOPE, WRITE_SCOPE],
+      scope: scopes,
       metadata: { githubLogin: login },
       props: {
         githubUserId: String(githubUser.id),
         githubLogin: login,
-        scopes: [READ_SCOPE, WRITE_SCOPE],
+        scopes,
       } satisfies McpAuthProps,
     });
     return new Response(null, {
@@ -226,6 +233,11 @@ function authorizationFailure(error: unknown): Response {
   if (error.state) redirect.searchParams.set('state', error.state);
   if (error.issuer) redirect.searchParams.set('iss', error.issuer);
   return Response.redirect(redirect.toString(), 302);
+}
+
+function grantedScopes(props: { scopes?: unknown } | undefined): string[] {
+  const requested = Array.isArray(props?.scopes) ? props.scopes : [];
+  return [...new Set(requested.filter((scope) => scope === READ_SCOPE || scope === WRITE_SCOPE))];
 }
 
 function publicOrigin(env: Env): URL {

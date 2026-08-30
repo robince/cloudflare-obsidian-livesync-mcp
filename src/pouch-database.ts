@@ -193,7 +193,7 @@ export class PouchDatabase extends DurableObject<Env> {
       throw new Error(`unsupported LiveSync profile (${profile.reasons.join(', ')})`);
     }
     if (this.commonlibFacade && this.commonlibFingerprint !== profile.fingerprint) {
-      await this.disposeCommonlib();
+      if (this.commonlibRefs === 0) await this.disposeCommonlib();
     }
     if (!this.commonlibFacade) {
       const creating = this.commonlibCreate ?? this.createCommonlib(profile);
