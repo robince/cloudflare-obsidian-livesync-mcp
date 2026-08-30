@@ -11,7 +11,7 @@
     "check": "npm run check:dependencies && npm run check:storage && npm run check --workspaces --if-present",
     "check:dependencies": "node --test test/production-dependencies.test.mjs && node scripts/check-production-dependencies.mjs",
     "check:storage": "tsc --noEmit",
-    "test": "npm run test:dependencies && vitest run test/worker.test.ts && vitest run test/commonlib-bridge.test.ts",
+    "test": "npm run test:dependencies && vitest run test/worker.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts",
     "test:dependencies": "node --test test/production-dependencies.test.mjs",
     "fixture:livesync": "node scripts/generate-livesync-fixture.mjs",
     "test:current-pouchdb": "vitest run test/current-pouchdb.test.ts",
@@ -25,6 +25,7 @@
     "dry-run:storage": "wrangler deploy --dry-run --outdir dist/storage"
   },
   "dependencies": {
+    "@cloudflare-obsidian-livesync/contracts": "workspace:*",
     "@robince/pouchdb-adapter-cloudflare-do": "1.1.2-cloudflare-do.0",
     "@vrtmrz/livesync-commonlib": "0.1.19",
     "pouchdb-adapter-http": "^9.0.0",

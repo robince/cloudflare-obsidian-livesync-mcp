@@ -15,6 +15,12 @@ export interface CommonlibFile {
   revision: string;
 }
 
+export interface CommonlibFileMetadata {
+  id: string;
+  path: string;
+  revision: string;
+}
+
 export class CommonlibFacade {
   private readonly manipulator: DirectFileManipulator;
 
@@ -52,6 +58,16 @@ export class CommonlibFacade {
     const entry = await this.manipulator.get(path as CommonlibPath);
     if (!entry || !entry._rev) return false;
     return { content: entryData(entry), revision: entry._rev };
+  }
+
+  async list(): Promise<CommonlibFileMetadata[]> {
+    await this.ready();
+    const files: CommonlibFileMetadata[] = [];
+    for await (const entry of this.manipulator.enumerateAllNormalDocs({ metaOnly: true })) {
+      if (typeof entry._id !== 'string' || typeof entry._rev !== 'string' || typeof entry.path !== 'string') continue;
+      files.push({ id: entry._id, path: entry.path, revision: entry._rev });
+    }
+    return files;
   }
 
   async close(): Promise<void> {

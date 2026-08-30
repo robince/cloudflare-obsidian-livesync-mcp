@@ -1,6 +1,14 @@
 import { DurableObject } from 'cloudflare:workers';
 import cloudflareDOAdapter from '@robince/pouchdb-adapter-cloudflare-do';
 import PouchDB from 'pouchdb-core';
+import type {
+  ListVaultFilesRequest,
+  ListVaultFilesData,
+  ReadVaultFileRequest,
+  ReadVaultFileData,
+  VaultResult,
+  VaultStatusData,
+} from '@cloudflare-obsidian-livesync/contracts';
 
 import { booleanParam, couchError, json, jsonParam, pouchError, readJson } from './http';
 import { matchesSelector } from './selector';
@@ -13,6 +21,7 @@ import {
 } from './livesync-vault/profile';
 import type { DatabaseInfo, JsonObject } from './types';
 import type { CommonlibFacade } from './livesync-vault/commonlib';
+import { LiveSyncVault } from './livesync-vault/vault';
 
 PouchDB.plugin(cloudflareDOAdapter);
 
@@ -119,6 +128,22 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.database(name).allDocs(options);
   }
 
+  /**
+   * The public semantic RPC deliberately has no database parameter. This
+   * Durable Object owns exactly one persisted database identity.
+   */
+  async vaultStatus(): Promise<VaultResult<VaultStatusData>> {
+    return this.vault().status();
+  }
+
+  async listVaultFiles(request: ListVaultFilesRequest): Promise<VaultResult<ListVaultFilesData>> {
+    return this.vault().list(request);
+  }
+
+  async readVaultFile(request: ReadVaultFileRequest): Promise<VaultResult<ReadVaultFileData>> {
+    return this.vault().read(request);
+  }
+
   private requireExists(): void {
     if (!this.exists()) {
       throw Object.assign(new Error('Database does not exist.'), { status: 404, name: 'not_found' });
@@ -128,6 +153,16 @@ export class PouchDatabase extends DurableObject<Env> {
   private commonlib(): Promise<CommonlibFacade> {
     this.commonlibFacade ??= this.createCommonlib();
     return this.commonlibFacade;
+  }
+
+  private vault(): LiveSyncVault {
+    return new LiveSyncVault({
+      profile: async () => {
+        this.requireExists();
+        return this.inspectCommonlibProfile();
+      },
+      commonlib: async () => this.commonlib(),
+    });
   }
 
   private async createCommonlib(): Promise<CommonlibFacade> {
