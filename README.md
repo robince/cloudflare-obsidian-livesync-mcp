@@ -29,6 +29,10 @@ The protocol suite runs against both PouchDB 9 from npm and the current local
 `../pouchdb` checkout. This is a focused compatibility server, not a general
 replacement for every CouchDB feature; see [COMPATIBILITY.md](COMPATIBILITY.md).
 
+The selected architecture and phased implementation plan for logical Obsidian
+vault access, same-object FTS5 indexing, and a separate MCP Worker are documented
+in [MCP_PLAN.md](MCP_PLAN.md).
+
 ## Set up
 
 This workspace currently consumes the sibling adapter packages from
