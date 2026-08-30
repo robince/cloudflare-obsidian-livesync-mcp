@@ -1,8 +1,9 @@
 # Read-only Obsidian LiveSync MCP Worker
 
-This Worker exposes exactly three authenticated tools for one configured vault:
-`vault_status`, `list_files`, and `read_file`. It never accepts a database name
-from an MCP client and has no write tool.
+This Worker exposes authenticated tools for one configured vault:
+`vault_status`, `list_files`, `read_file`, `create_file`, `edit_file`,
+`delete_file`, and `move_file`. It never accepts a database name from an MCP
+client. Writes require the current document revision.
 
 ## Configure
 
@@ -40,6 +41,7 @@ npm test --workspace @cloudflare-obsidian-livesync/mcp
 npm run dry-run --workspace @cloudflare-obsidian-livesync/mcp
 ```
 
-The current MWE has fake-RPC/schema tests and a Wrangler bundle check. A real
-two-Worker OAuth/client staging test is intentionally deferred to the disposable
-vault staging checkpoint.
+Tool registration, output schemas, and allowlist checks are covered by the MCP
+workspace tests. Vault status/list/read go through the storage Durable Object in
+the root workerd suite. Interactive OAuth against a disposable vault is the
+staging checkpoint.

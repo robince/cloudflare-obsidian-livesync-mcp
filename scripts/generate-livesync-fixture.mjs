@@ -106,7 +106,12 @@ async function main() {
     const origin = endpoint.href.replace(/\/$/, '');
     configure(settingsA, origin, database, user, password);
     configure(settingsB, origin, database, user, password);
-    await requestJson(`${origin}/${database}`, user, password, { method: 'PUT' });
+    try {
+      await requestJson(`${origin}/${database}`, user, password, { method: 'PUT' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('412')) throw error;
+    }
 
     const files = {
       'notes/frontmatter.md': '---\ntitle: MCP fixture\n---\n\n# Current LiveSync\n',

@@ -1,15 +1,25 @@
 import {
   CONTRACT_VERSION,
+  createVaultFileRequestSchema,
+  deleteVaultFileRequestSchema,
   listVaultFilesRequestSchema,
+  moveVaultFileRequestSchema,
   readVaultFileRequestSchema,
+  updateVaultFileRequestSchema,
   VAULT_LIMITS,
+  type CreateVaultFileRequest,
+  type DeleteVaultFileRequest,
   type ListVaultFilesRequest,
   type ListVaultFilesData,
+  type MoveVaultFileData,
+  type MoveVaultFileRequest,
   type ReadVaultFileRequest,
   type ReadVaultFileData,
+  type UpdateVaultFileRequest,
   type VaultErrorCode,
   type VaultResult,
   type VaultStatusData,
+  type WriteVaultFileData,
 } from '@cloudflare-obsidian-livesync/contracts';
 
 import type { CommonlibFacade, CommonlibFileMetadata } from './commonlib';
@@ -17,12 +27,13 @@ import type { VaultProfileInspection } from './profile';
 
 type VaultDependencies = {
   profile: () => Promise<VaultProfileInspection>;
-  commonlib: () => Promise<CommonlibFacade>;
+  acquireCommonlib: () => Promise<CommonlibFacade>;
+  releaseCommonlib: () => Promise<void>;
 };
 
 type Cursor = { v: 1; prefix: string; id: string };
 
-/** Read-only logical vault operations exposed by the storage Durable Object. */
+/** Logical vault operations exposed by the storage Durable Object. */
 export class LiveSyncVault {
   constructor(private readonly dependencies: VaultDependencies) {}
 
@@ -50,25 +61,26 @@ export class LiveSyncVault {
     if (parsed.data.cursor && !cursor) return failure('invalid_input', 'Cursor does not match this prefix.');
     const limit = parsed.data.limit ?? VAULT_LIMITS.defaultListLimit;
 
-    try {
-      const profileError = await this.unsupportedProfile();
-      if (profileError) return profileError;
-      const allFiles = await (await this.dependencies.commonlib()).list();
-      const files = allFiles
-        .filter((file) => isMarkdownPath(file.path) && file.path.startsWith(prefix))
-        .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
-      const remaining = cursor ? files.filter((file) => file.id > cursor.id) : files;
-      const page = remaining.slice(0, limit);
-      const next = remaining.length > page.length && page.length > 0
+    return this.withCommonlib(async (commonlib, profile) => {
+      const page: CommonlibFileMetadata[] = [];
+      let extra = false;
+      for await (const file of commonlib.enumerate()) {
+        if (!isListedMarkdown(file, prefix, profile.handleFilenameCaseSensitive)) continue;
+        if (cursor && file.id <= cursor.id) continue;
+        if (page.length === limit) {
+          extra = true;
+          break;
+        }
+        page.push(file);
+      }
+      const next = extra && page.length > 0
         ? encodeCursor({ v: 1, prefix, id: page[page.length - 1].id })
         : undefined;
       return success({
         files: page.map(toPublicFile),
         ...(next ? { cursor: next } : {}),
       });
-    } catch (error) {
-      return failure(errorCode(error), errorMessage(error));
-    }
+    });
   }
 
   async read(request: ReadVaultFileRequest): Promise<VaultResult<ReadVaultFileData>> {
@@ -77,24 +89,141 @@ export class LiveSyncVault {
       return failure('invalid_input', 'Path must be a safe relative Markdown file.');
     }
 
-    try {
-      const profileError = await this.unsupportedProfile();
-      if (profileError) return profileError;
-      const file = await (await this.dependencies.commonlib()).read(parsed.data.path);
+    return this.withCommonlib(async (commonlib) => {
+      const meta = await commonlib.inspect(parsed.data.path);
+      if (!meta) return failure('not_found', 'File not found.');
+      if (meta.datatype !== 'plain') {
+        return failure('unsupported', 'Only plain Markdown notes can be read.');
+      }
+      if (typeof meta.size === 'number' && meta.size > VAULT_LIMITS.maxReadBytes) {
+        return failure('too_large', 'File exceeds the read size limit.');
+      }
+      const file = await commonlib.read(parsed.data.path);
       if (!file) return failure('not_found', 'File not found.');
       if (new TextEncoder().encode(file.content).byteLength > VAULT_LIMITS.maxReadBytes) {
         return failure('too_large', 'File exceeds the read size limit.');
       }
       return success({ path: parsed.data.path, revision: file.revision, content: file.content });
+    });
+  }
+
+  async create(request: CreateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    const parsed = createVaultFileRequestSchema.safeParse(request);
+    if (!parsed.success || !isMarkdownPath(parsed.data?.path ?? '')) {
+      return failure('invalid_input', 'Path must be a safe relative Markdown file.');
+    }
+    const contentError = contentTooLarge(parsed.data.content);
+    if (contentError) return contentError;
+
+    return this.withCommonlib(async (commonlib) => {
+      const existing = await commonlib.inspect(parsed.data.path);
+      if (existing) return failure('conflict', 'File already exists.');
+      const now = Date.now();
+      const written = await commonlib.write(parsed.data.path, parsed.data.content, {
+        ctime: now,
+        mtime: now,
+        size: utf8Bytes(parsed.data.content),
+      });
+      if (!written) return failure('internal', 'Could not create the file.');
+      return success({ path: parsed.data.path, revision: written.revision });
+    });
+  }
+
+  async update(request: UpdateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    const parsed = updateVaultFileRequestSchema.safeParse(request);
+    if (!parsed.success || !isMarkdownPath(parsed.data?.path ?? '')) {
+      return failure('invalid_input', 'Path must be a safe relative Markdown file.');
+    }
+    const contentError = contentTooLarge(parsed.data.content);
+    if (contentError) return contentError;
+
+    return this.withCommonlib(async (commonlib) => {
+      const existing = await commonlib.inspect(parsed.data.path);
+      if (!existing) return failure('not_found', 'File not found.');
+      const written = await commonlib.write(
+        parsed.data.path,
+        parsed.data.content,
+        {
+          ctime: existing.ctime ?? Date.now(),
+          mtime: Date.now(),
+          size: utf8Bytes(parsed.data.content),
+        },
+        parsed.data.expectedRevision
+      );
+      if (!written) return failure('conflict', 'The file was modified by another client.');
+      return success({ path: parsed.data.path, revision: written.revision });
+    });
+  }
+
+  async delete(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    const parsed = deleteVaultFileRequestSchema.safeParse(request);
+    if (!parsed.success || !isMarkdownPath(parsed.data?.path ?? '')) {
+      return failure('invalid_input', 'Path must be a safe relative Markdown file.');
+    }
+
+    return this.withCommonlib(async (commonlib) => {
+      const existing = await commonlib.inspect(parsed.data.path);
+      if (!existing) return failure('not_found', 'File not found.');
+      if (existing.revision !== parsed.data.expectedRevision) {
+        return failure('conflict', 'The file was modified by another client.');
+      }
+      const removed = await commonlib.remove(parsed.data.path);
+      if (!removed) return failure('internal', 'Could not delete the file.');
+      return success({ path: parsed.data.path, revision: existing.revision });
+    });
+  }
+
+  async move(request: MoveVaultFileRequest): Promise<VaultResult<MoveVaultFileData>> {
+    const parsed = moveVaultFileRequestSchema.safeParse(request);
+    if (!parsed.success || !isMarkdownPath(parsed.data?.from ?? '') || !isMarkdownPath(parsed.data?.to ?? '')) {
+      return failure('invalid_input', 'Paths must be safe relative Markdown files.');
+    }
+
+    return this.withCommonlib(async (commonlib) => {
+      const source = await commonlib.read(parsed.data.from);
+      if (!source) return failure('not_found', 'File not found.');
+      if (source.revision !== parsed.data.expectedRevision) {
+        return failure('conflict', 'The file was modified by another client.');
+      }
+      const sourceId = await commonlib.documentId(parsed.data.from);
+      const destId = await commonlib.documentId(parsed.data.to);
+      const destination = await commonlib.inspect(parsed.data.to);
+      if (destination && sourceId !== destId) {
+        return failure('conflict', 'A file already exists at the destination.');
+      }
+      const now = Date.now();
+      const written = await commonlib.write(
+        parsed.data.to,
+        source.content,
+        { ctime: now, mtime: now, size: utf8Bytes(source.content) },
+        sourceId === destId ? parsed.data.expectedRevision : undefined
+      );
+      if (!written) return failure('conflict', 'Could not write the destination file.');
+      if (sourceId !== destId) {
+        const removed = await commonlib.remove(parsed.data.from);
+        if (!removed) return failure('internal', 'Moved the file but could not remove the original path.');
+      }
+      return success({ from: parsed.data.from, to: parsed.data.to, revision: written.revision });
+    });
+  }
+
+  private async withCommonlib<T>(
+    operation: (commonlib: CommonlibFacade, profile: Extract<VaultProfileInspection, { supported: true }>) => Promise<VaultResult<T>>
+  ): Promise<VaultResult<T>> {
+    try {
+      const profile = await this.dependencies.profile();
+      if (!profile.supported) {
+        return failure('unsupported', `Unsupported LiveSync vault (${profile.reasons.join(', ')}).`);
+      }
+      const commonlib = await this.dependencies.acquireCommonlib();
+      try {
+        return await operation(commonlib, profile);
+      } finally {
+        await this.dependencies.releaseCommonlib();
+      }
     } catch (error) {
       return failure(errorCode(error), errorMessage(error));
     }
-  }
-
-  private async unsupportedProfile(): Promise<VaultResult<never> | undefined> {
-    const profile = await this.dependencies.profile();
-    if (profile.supported) return undefined;
-    return failure('unsupported', `Unsupported LiveSync vault (${profile.reasons.join(', ')}).`);
   }
 }
 
@@ -110,15 +239,38 @@ function toPublicFile(file: CommonlibFileMetadata) {
   return { path: file.path, revision: file.revision };
 }
 
+function isListedMarkdown(
+  file: CommonlibFileMetadata,
+  prefix: string,
+  caseSensitive: boolean
+): boolean {
+  if (file.datatype !== 'plain' || !isMarkdownPath(file.path)) return false;
+  if (prefix === '') return true;
+  if (caseSensitive) return file.path.startsWith(prefix);
+  return file.path.toLowerCase().startsWith(prefix.toLowerCase());
+}
+
 function isSafePrefix(prefix: string): boolean {
   if (prefix === '') return true;
   if (prefix.startsWith('/') || prefix.includes('\\') || prefix.includes('\0') || prefix.startsWith('h:')) return false;
   const segments = (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix).split('/');
+  if (segments.some((segment) => segment === '_local' || segment === '_design')) return false;
   return segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
 function isMarkdownPath(path: string): boolean {
   return path.endsWith('.md') && isSafePrefix(path);
+}
+
+function utf8Bytes(content: string): number {
+  return new TextEncoder().encode(content).byteLength;
+}
+
+function contentTooLarge(content: string): VaultResult<never> | undefined {
+  if (utf8Bytes(content) > VAULT_LIMITS.maxWriteBytes) {
+    return failure('too_large', 'File exceeds the write size limit.');
+  }
+  return undefined;
 }
 
 function encodeCursor(cursor: Cursor): string {
@@ -142,12 +294,24 @@ function decodeCursor(value: string | undefined, prefix: string): Cursor | undef
 }
 
 function errorCode(error: unknown): VaultErrorCode {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = error.code;
+    if (
+      code === 'unsupported'
+      || code === 'too_large'
+      || code === 'not_found'
+      || code === 'unavailable'
+      || code === 'conflict'
+    ) {
+      return code;
+    }
+  }
   if (error && typeof error === 'object' && 'status' in error) {
     if (error.status === 404) return 'not_found';
     if (error.status === 503) return 'unavailable';
   }
   const message = error instanceof Error ? error.message : '';
-  if (message.startsWith('unsupported LiveSync profile')) return 'unsupported';
+  if (message.startsWith('unsupported LiveSync')) return 'unsupported';
   return 'internal';
 }
 

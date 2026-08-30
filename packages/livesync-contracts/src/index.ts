@@ -7,6 +7,9 @@ export const VAULT_LIMITS = {
   maxListLimit: 100,
   defaultListLimit: 50,
   maxReadBytes: 512_000,
+  maxWriteBytes: 512_000,
+  maxPathLength: 1024,
+  maxCursorLength: 2048,
 } as const;
 
 export const vaultErrorCodeSchema = z.enum([
@@ -15,6 +18,7 @@ export const vaultErrorCodeSchema = z.enum([
   'unsupported',
   'too_large',
   'unavailable',
+  'conflict',
   'internal',
 ]);
 
@@ -43,9 +47,9 @@ export const vaultStatusDataSchema = z.object({
 export type VaultStatusData = z.infer<typeof vaultStatusDataSchema>;
 
 export const listVaultFilesRequestSchema = z.object({
-  prefix: z.string().optional(),
+  prefix: z.string().max(VAULT_LIMITS.maxPathLength).optional(),
   limit: z.number().int().positive().max(VAULT_LIMITS.maxListLimit).optional(),
-  cursor: z.string().optional(),
+  cursor: z.string().max(VAULT_LIMITS.maxCursorLength).optional(),
 }).strict();
 export type ListVaultFilesRequest = z.infer<typeof listVaultFilesRequestSchema>;
 
@@ -61,7 +65,9 @@ export const listVaultFilesDataSchema = z.object({
 });
 export type ListVaultFilesData = z.infer<typeof listVaultFilesDataSchema>;
 
-export const readVaultFileRequestSchema = z.object({ path: z.string() }).strict();
+export const readVaultFileRequestSchema = z.object({
+  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+}).strict();
 export type ReadVaultFileRequest = z.infer<typeof readVaultFileRequestSchema>;
 
 export const readVaultFileDataSchema = z.object({
@@ -70,3 +76,42 @@ export const readVaultFileDataSchema = z.object({
   content: z.string(),
 });
 export type ReadVaultFileData = z.infer<typeof readVaultFileDataSchema>;
+
+export const writeVaultFileDataSchema = z.object({
+  path: z.string(),
+  revision: z.string(),
+});
+export type WriteVaultFileData = z.infer<typeof writeVaultFileDataSchema>;
+
+export const createVaultFileRequestSchema = z.object({
+  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  content: z.string(),
+}).strict();
+export type CreateVaultFileRequest = z.infer<typeof createVaultFileRequestSchema>;
+
+export const updateVaultFileRequestSchema = z.object({
+  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  content: z.string(),
+  expectedRevision: z.string().min(1),
+}).strict();
+export type UpdateVaultFileRequest = z.infer<typeof updateVaultFileRequestSchema>;
+
+export const deleteVaultFileRequestSchema = z.object({
+  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  expectedRevision: z.string().min(1),
+}).strict();
+export type DeleteVaultFileRequest = z.infer<typeof deleteVaultFileRequestSchema>;
+
+export const moveVaultFileRequestSchema = z.object({
+  from: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  to: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  expectedRevision: z.string().min(1),
+}).strict();
+export type MoveVaultFileRequest = z.infer<typeof moveVaultFileRequestSchema>;
+
+export const moveVaultFileDataSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  revision: z.string(),
+});
+export type MoveVaultFileData = z.infer<typeof moveVaultFileDataSchema>;

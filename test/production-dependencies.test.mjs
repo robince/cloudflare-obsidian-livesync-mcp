@@ -76,6 +76,21 @@ describe('production dependency provenance', () => {
     }), []);
   });
 
+  it('does not treat nested node_modules paths as workspace packages', () => {
+    const lockfile = {
+      packages: {
+        '': { dependencies: { '@example/mcp': 'workspace:*' } },
+        'apps/mcp': { name: '@example/mcp', version: '1.0.0', dependencies: { poisoned: '^1.0.0' } },
+        'node_modules/@example/mcp': { resolved: 'apps/mcp', link: true },
+        'apps/mcp/node_modules/poisoned': {
+          version: '1.0.0',
+          resolved: 'git+https://github.com/example/poisoned.git',
+        },
+      },
+    };
+    assert.notDeepEqual(validateProductionDependencies({ manifest, lockfile, registry }), []);
+  });
+
   it('rejects a poisoned transitive production dependency marked dev', () => {
     const lockfile = lockWith({
       ...registryEntry,

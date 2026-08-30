@@ -28,12 +28,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: cloudflare-obsidian-livesync
+          persist-credentials: false
 
       - name: Check out upstream PouchDB
         uses: actions/checkout@v4
         with:
           repository: pouchdb/pouchdb
           path: pouchdb
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

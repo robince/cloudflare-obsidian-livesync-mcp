@@ -9,9 +9,7 @@ import { createMcpHandler } from 'agents/mcp/server';
 
 import { allowedGithubLogins, normalizeGithubLogin } from './auth-utils';
 import { vaultRpcForEnv } from './vault-rpc';
-import { createVaultMcpServer } from './vault-tools';
-
-const READ_SCOPE = 'vault:read';
+import { allowlistFromEnv, createVaultMcpServer, READ_SCOPE, WRITE_SCOPE } from './vault-tools';
 const AUTH_STATE_TTL_SECONDS = 10 * 60;
 const CSRF_COOKIE = '__Host-obsidian-mcp-csrf';
 
@@ -37,7 +35,7 @@ class McpApi extends WorkerEntrypoint<Env, McpAuthProps> {
   fetch(request: Request): Promise<Response> {
     const origin = publicOrigin(this.env);
     return createMcpHandler(
-      () => createVaultMcpServer(vaultRpcForEnv(this.env)),
+      () => createVaultMcpServer(vaultRpcForEnv(this.env), { allowedLogins: allowlistFromEnv(this.env) }),
       {
         route: '/mcp',
         allowedHostnames: [origin.hostname],
@@ -62,14 +60,14 @@ function providerFor(env: Env): OAuthProvider<Env> {
     tokenEndpoint: '/oauth/token',
     clientRegistrationEndpoint: '/oauth/register',
     clientIdMetadataDocumentEnabled: true,
-    scopesSupported: [READ_SCOPE],
-    tokenExchangeCallback: ({ props, requestedScope }) => ({
-      accessTokenProps: { ...props, scopes: requestedScope },
+    scopesSupported: [READ_SCOPE, WRITE_SCOPE],
+    tokenExchangeCallback: ({ props }) => ({
+      accessTokenProps: { ...props, scopes: [READ_SCOPE, WRITE_SCOPE] },
     }),
     resourceMetadata: {
       resource,
       authorization_servers: [origin.origin],
-      scopes_supported: [READ_SCOPE],
+      scopes_supported: [READ_SCOPE, WRITE_SCOPE],
       resource_name: 'Obsidian LiveSync vault',
     },
   });
@@ -101,8 +99,8 @@ async function startAuthorization(request: Request, env: OAuthEnv): Promise<Resp
 
   const client = await env.OAUTH_PROVIDER.lookupClient(authorization.clientId);
   if (!client) return new Response('Unknown OAuth client.', { status: 400 });
-  if (!authorization.scope.includes(READ_SCOPE)) {
-    return new Response('The vault:read scope is required.', { status: 400 });
+  if (!authorization.scope.includes(READ_SCOPE) && !authorization.scope.includes(WRITE_SCOPE)) {
+    return new Response('The vault:read or vault:write scope is required.', { status: 400 });
   }
 
   const id = randomToken();
@@ -168,9 +166,13 @@ async function completeGithubAuthorization(request: Request, env: OAuthEnv): Pro
     const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
       request: state.request,
       userId: `github-${githubUser.id}`,
-      scope: [READ_SCOPE],
+      scope: [READ_SCOPE, WRITE_SCOPE],
       metadata: { githubLogin: login },
-      props: { githubUserId: String(githubUser.id), githubLogin: login, scopes: [READ_SCOPE] } satisfies McpAuthProps,
+      props: {
+        githubUserId: String(githubUser.id),
+        githubLogin: login,
+        scopes: [READ_SCOPE, WRITE_SCOPE],
+      } satisfies McpAuthProps,
     });
     return new Response(null, {
       status: 302,
@@ -301,7 +303,7 @@ function githubSecrets(env: Env): GithubSecrets {
 }
 
 function consentPage(authorizationId: string, csrf: string, clientName: string): string {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize read-only vault access</h1><p>${escapeHtml(clientName)} requests access to list and read your configured vault.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>${escapeHtml(clientName)} requests access to list, read, and edit Markdown files in your configured vault.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
 }
 
 function htmlResponse(body: string, setCookie: string): Response {
@@ -322,9 +324,17 @@ function escapeHtml(value: string): string {
 
 export default {
   fetch(request, env, ctx) {
-    if (!isCanonicalRequest(request, env)) {
-      return Promise.resolve(new Response('Invalid host.', { status: 400 }));
+    try {
+      if (!isCanonicalRequest(request, env)) {
+        return Promise.resolve(new Response('Invalid host.', { status: 400 }));
+      }
+      return providerFor(env).fetch(request, env, ctx);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (message.includes('MCP_PUBLIC_BASE_URL')) {
+        return Promise.resolve(new Response('MCP_PUBLIC_BASE_URL is invalid.', { status: 500 }));
+      }
+      throw error;
     }
-    return providerFor(env).fetch(request, env, ctx);
   },
 } satisfies ExportedHandler<Env>;

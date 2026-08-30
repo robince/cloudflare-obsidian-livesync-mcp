@@ -1,7 +1,9 @@
 import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
 import fixture from './fixtures/livesync-1.0.21.json';
+import type { PouchDatabase } from '../src/pouch-database';
 import type { JsonObject } from '../src/types';
 
 function databaseName(prefix: string): string {
@@ -92,5 +94,159 @@ describe('read-only vault RPC', () => {
       ok: false,
       error: { code: 'unsupported' },
     });
+  });
+
+  it('does not keep a Commonlib session after a read returns', async () => {
+    const { stub } = await seededVault('session-teardown');
+    await stub.readVaultFile({ path: 'notes/frontmatter.md' });
+    const leftover = await runInDurableObject(stub, (instance: PouchDatabase) => ({
+      facade: instance['commonlibFacade'],
+      refs: instance['commonlibRefs'],
+    }));
+    expect(leftover).toEqual({ facade: undefined, refs: 0 });
+  });
+
+  it('retries Commonlib construction after a rejected create', async () => {
+    const name = databaseName('sticky-create');
+    const stub = env.POUCH_DATABASES.getByName(name);
+    await expect(stub.listVaultFiles({})).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'not_found' },
+    });
+    const { stub: seeded } = await seededVault('sticky-create-ok');
+    await expect(seeded.vaultStatus()).resolves.toMatchObject({
+      ok: true,
+      data: { compatible: true },
+    });
+  });
+
+  it('hides deleted and binary notes from listing and fails closed on read', async () => {
+    const { name, stub } = await seededVault('tombstone');
+    await stub.putDocument(name, {
+      _id: 'notes/deleted.md',
+      path: 'notes/deleted.md',
+      type: 'plain',
+      datatype: 'plain',
+      children: [],
+      ctime: 1,
+      mtime: 1,
+      size: 0,
+      deleted: true,
+      eden: {},
+    });
+    await stub.putDocument(name, {
+      _id: 'notes/binary.md',
+      path: 'notes/binary.md',
+      type: 'newnote',
+      datatype: 'newnote',
+      children: [],
+      ctime: 1,
+      mtime: 1,
+      size: 4,
+      eden: {},
+    });
+    await stub.putDocument(name, {
+      _id: 'notes/casetest.md',
+      path: 'Notes/CaseTest.md',
+      type: 'plain',
+      datatype: 'plain',
+      children: [],
+      ctime: 1,
+      mtime: 1,
+      size: 0,
+      eden: {},
+    });
+
+    const listed = await stub.listVaultFiles({ prefix: 'notes/' });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    const paths = listed.data.files.map((file) => file.path);
+    expect(paths).not.toContain('notes/deleted.md');
+    expect(paths).not.toContain('notes/binary.md');
+    expect(paths).toContain('Notes/CaseTest.md');
+
+    await expect(stub.readVaultFile({ path: 'notes/deleted.md' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'not_found' },
+    });
+    await expect(stub.readVaultFile({ path: 'notes/binary.md' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unsupported' },
+    });
+    await expect(stub.readVaultFile({ path: '_design/foo.md' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input' },
+    });
+  });
+
+  it('creates, edits, moves, and deletes Markdown notes', async () => {
+    const { stub } = await seededVault('vault-write');
+    const created = await stub.createVaultFile({
+      path: 'notes/created.md',
+      content: '# Created\nhello\n',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await expect(stub.readVaultFile({ path: 'notes/created.md' })).resolves.toMatchObject({
+      ok: true,
+      data: { content: '# Created\nhello\n' },
+    });
+    await expect(stub.createVaultFile({
+      path: 'notes/created.md',
+      content: '# again\n',
+    })).resolves.toMatchObject({ ok: false, error: { code: 'conflict' } });
+
+    const edited = await stub.updateVaultFile({
+      path: 'notes/created.md',
+      content: '# Edited\n',
+      expectedRevision: created.data.revision,
+    });
+    expect(edited.ok).toBe(true);
+    if (!edited.ok) return;
+    await expect(stub.updateVaultFile({
+      path: 'notes/created.md',
+      content: '# stale\n',
+      expectedRevision: created.data.revision,
+    })).resolves.toMatchObject({ ok: false, error: { code: 'conflict' } });
+    await expect(stub.readVaultFile({ path: 'notes/created.md' })).resolves.toMatchObject({
+      ok: true,
+      data: { content: '# Edited\n' },
+    });
+
+    const moved = await stub.moveVaultFile({
+      from: 'notes/created.md',
+      to: 'notes/moved.md',
+      expectedRevision: edited.data.revision,
+    });
+    expect(moved).toMatchObject({ ok: true });
+    if (!moved.ok) return;
+    await expect(stub.readVaultFile({ path: 'notes/created.md' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'not_found' },
+    });
+    await expect(stub.readVaultFile({ path: 'notes/moved.md' })).resolves.toMatchObject({
+      ok: true,
+      data: { content: '# Edited\n' },
+    });
+
+    const listed = await stub.listVaultFiles({ prefix: 'notes/' });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    const paths = listed.data.files.map((file) => file.path);
+    expect(paths).toContain('notes/moved.md');
+    expect(paths).not.toContain('notes/created.md');
+
+    await expect(stub.deleteVaultFile({
+      path: 'notes/moved.md',
+      expectedRevision: moved.data.revision,
+    })).resolves.toMatchObject({ ok: true });
+    await expect(stub.readVaultFile({ path: 'notes/moved.md' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'not_found' },
+    });
+    const afterDelete = await stub.listVaultFiles({ prefix: 'notes/' });
+    expect(afterDelete.ok).toBe(true);
+    if (!afterDelete.ok) return;
+    expect(afterDelete.data.files.map((file) => file.path)).not.toContain('notes/moved.md');
   });
 });

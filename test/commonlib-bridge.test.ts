@@ -77,21 +77,18 @@ describe('Self-hosted LiveSync 1.0.21 compatibility in workerd', () => {
       await stub.putDocument(name, withoutRevision(document as JsonObject));
     }
 
-    const read = await runInDurableObject(stub, async (instance: PouchDatabase) => {
-      const commonlib = await instance['commonlib']();
-      try {
-        return Object.fromEntries(await Promise.all(
-          Object.keys(fixture.files).map(async (path) => [path, await commonlib.read(path)])
-        ));
-      } finally {
-        await commonlib.close();
-      }
-    });
-
     for (const [path, content] of Object.entries(fixture.files)) {
-      expect(read[path]).toMatchObject({ content });
-      expect(read[path]).toHaveProperty('revision');
+      await expect(stub.readVaultFile({ path })).resolves.toMatchObject({
+        ok: true,
+        data: { path, content },
+      });
     }
+
+    const leftover = await runInDurableObject(stub, (instance: PouchDatabase) => ({
+      facade: instance['commonlibFacade'],
+      refs: instance['commonlibRefs'],
+    }));
+    expect(leftover).toEqual({ facade: undefined, refs: 0 });
   });
 });
 
@@ -112,7 +109,7 @@ describe('read profile checks', () => {
     }), undefined)).toMatchObject({ supported: true });
   });
 
-  it.each([
+  it.each<[Record<string, unknown>, string]>([
     [{ encrypt: true, usePathObfuscation: false }, 'encryption_unsupported'],
     [{ encrypt: false, usePathObfuscation: true }, 'path_obfuscation_unsupported'],
   ])('rejects unsupported content addressing', (preferred, reason) => {

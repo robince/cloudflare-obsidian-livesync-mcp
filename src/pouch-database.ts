@@ -2,12 +2,18 @@ import { DurableObject } from 'cloudflare:workers';
 import cloudflareDOAdapter from '@robince/pouchdb-adapter-cloudflare-do';
 import PouchDB from 'pouchdb-core';
 import type {
+  CreateVaultFileRequest,
+  DeleteVaultFileRequest,
   ListVaultFilesRequest,
   ListVaultFilesData,
+  MoveVaultFileData,
+  MoveVaultFileRequest,
   ReadVaultFileRequest,
   ReadVaultFileData,
+  UpdateVaultFileRequest,
   VaultResult,
   VaultStatusData,
+  WriteVaultFileData,
 } from '@cloudflare-obsidian-livesync/contracts';
 
 import { booleanParam, couchError, json, jsonParam, pouchError, readJson } from './http';
@@ -51,7 +57,10 @@ interface FindRequest {
 export class PouchDatabase extends DurableObject<Env> {
   private db?: AnyDatabase;
   private dbName?: string;
-  private commonlibFacade?: Promise<CommonlibFacade>;
+  private commonlibFacade?: CommonlibFacade;
+  private commonlibFingerprint?: string;
+  private commonlibRefs = 0;
+  private commonlibCreate?: Promise<CommonlibFacade>;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -144,15 +153,26 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.vault().read(request);
   }
 
+  async createVaultFile(request: CreateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    return this.vault().create(request);
+  }
+
+  async updateVaultFile(request: UpdateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    return this.vault().update(request);
+  }
+
+  async deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    return this.vault().delete(request);
+  }
+
+  async moveVaultFile(request: MoveVaultFileRequest): Promise<VaultResult<MoveVaultFileData>> {
+    return this.vault().move(request);
+  }
+
   private requireExists(): void {
     if (!this.exists()) {
       throw Object.assign(new Error('Database does not exist.'), { status: 404, name: 'not_found' });
     }
-  }
-
-  private commonlib(): Promise<CommonlibFacade> {
-    this.commonlibFacade ??= this.createCommonlib();
-    return this.commonlibFacade;
   }
 
   private vault(): LiveSyncVault {
@@ -161,15 +181,59 @@ export class PouchDatabase extends DurableObject<Env> {
         this.requireExists();
         return this.inspectCommonlibProfile();
       },
-      commonlib: async () => this.commonlib(),
+      acquireCommonlib: () => this.acquireCommonlib(),
+      releaseCommonlib: () => this.releaseCommonlib(),
     });
   }
 
-  private async createCommonlib(): Promise<CommonlibFacade> {
+  private async acquireCommonlib(): Promise<CommonlibFacade> {
+    this.requireExists();
+    const profile = await this.inspectCommonlibProfile();
+    if (!profile.supported) {
+      throw new Error(`unsupported LiveSync profile (${profile.reasons.join(', ')})`);
+    }
+    if (this.commonlibFacade && this.commonlibFingerprint !== profile.fingerprint) {
+      await this.disposeCommonlib();
+    }
+    if (!this.commonlibFacade) {
+      const creating = this.commonlibCreate ?? this.createCommonlib(profile);
+      this.commonlibCreate = creating;
+      try {
+        const facade = await creating;
+        if (!this.commonlibFacade) {
+          this.commonlibFacade = facade;
+          this.commonlibFingerprint = profile.fingerprint;
+        } else if (facade !== this.commonlibFacade) {
+          await facade.close().catch(() => undefined);
+        }
+      } catch (error) {
+        if (this.commonlibCreate === creating) this.commonlibCreate = undefined;
+        throw error;
+      }
+      if (this.commonlibCreate === creating) this.commonlibCreate = undefined;
+    }
+    this.commonlibRefs += 1;
+    return this.commonlibFacade;
+  }
+
+  private async releaseCommonlib(): Promise<void> {
+    if (this.commonlibRefs > 0) this.commonlibRefs -= 1;
+    if (this.commonlibRefs === 0) await this.disposeCommonlib();
+  }
+
+  private async disposeCommonlib(): Promise<void> {
+    const facade = this.commonlibFacade;
+    this.commonlibFacade = undefined;
+    this.commonlibFingerprint = undefined;
+    this.commonlibRefs = 0;
+    this.commonlibCreate = undefined;
+    if (facade) await facade.close().catch(() => undefined);
+  }
+
+  private async createCommonlib(profile: VaultProfileInspection): Promise<CommonlibFacade> {
     this.requireExists();
     if (!this.dbName) throw new Error('database identity is required');
     const { CommonlibFacade } = await import('./livesync-vault/commonlib');
-    const profile = await this.inspectCommonlibProfile();
     return new CommonlibFacade(
       this.dbName,
       this.inProcessCouchFetch(),

@@ -18,7 +18,9 @@ function findWorkspacePaths(manifest, lockfile) {
         if (typeof pattern !== 'string') return false;
         if (!pattern.includes('*')) return path === pattern.replace(/\/$/, '');
         const [prefix, suffix] = pattern.split('*', 2);
-        return path.startsWith(prefix) && path.endsWith(suffix) && path.length > prefix.length + suffix.length;
+        if (!path.startsWith(prefix) || !path.endsWith(suffix)) return false;
+        const matched = path.slice(prefix.length, suffix ? path.length - suffix.length : path.length);
+        return matched.length > 0 && !matched.includes('/');
       })
     )
   );

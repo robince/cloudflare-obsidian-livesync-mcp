@@ -16,8 +16,7 @@ export function createInProcessCouchFetch(
   const databasePath = `/${encodeURIComponent(databaseName)}`;
 
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const incoming = new Request(input, init);
-    const incomingUrl = new URL(incoming.url);
+    const incomingUrl = requestUrl(input);
     if (incomingUrl.origin !== IN_PROCESS_COUCH_ORIGIN) {
       throw new TypeError('in-process CouchDB transport rejected a foreign origin');
     }
@@ -28,6 +27,7 @@ export function createInProcessCouchFetch(
       throw new TypeError('in-process CouchDB transport rejected a database identity mismatch');
     }
 
+    const incoming = new Request(sanitizedRequestInfo(input, incomingUrl), init);
     const forwardedUrl = new URL(incomingUrl);
     forwardedUrl.pathname = incomingUrl.pathname.slice(databasePath.length) || '/';
     const headers = new Headers(incoming.headers);
@@ -50,4 +50,20 @@ export function createInProcessCouchFetch(
     }
     return response;
   };
+}
+
+function requestUrl(input: RequestInfo | URL): URL {
+  if (typeof input === 'string') return new URL(input);
+  if (input instanceof URL) return input;
+  return new URL(input.url);
+}
+
+/** Drop embedded credentials before constructing Request, which may reject them. */
+function sanitizedRequestInfo(input: RequestInfo | URL, url: URL): RequestInfo | URL {
+  if (typeof input === 'string' || input instanceof URL) {
+    url.username = '';
+    url.password = '';
+    return url;
+  }
+  return input;
 }

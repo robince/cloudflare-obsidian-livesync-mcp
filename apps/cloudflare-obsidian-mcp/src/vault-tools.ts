@@ -2,45 +2,87 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { getMcpAuthContext } from 'agents/mcp/server';
 import { z } from 'zod';
 
-import type { VaultResult } from '@cloudflare-obsidian-livesync/contracts';
+import {
+  CONTRACT_VERSION,
+  VAULT_LIMITS,
+  type VaultResult,
+} from '@cloudflare-obsidian-livesync/contracts';
+
+import { allowedGithubLogins, normalizeGithubLogin } from './auth-utils';
 import type { VaultRpc } from './vault-rpc';
 
-const MAX_PATH_LENGTH = 1024;
-const MAX_CURSOR_LENGTH = 2048;
+export const READ_SCOPE = 'vault:read';
+export const WRITE_SCOPE = 'vault:write';
 
-export const VAULT_TOOL_NAMES = ['vault_status', 'list_files', 'read_file'] as const;
+export const VAULT_TOOL_NAMES = [
+  'vault_status',
+  'list_files',
+  'read_file',
+  'create_file',
+  'edit_file',
+  'delete_file',
+  'move_file',
+] as const;
 
 export const listFilesInput = z.object({
-  prefix: z.string().max(MAX_PATH_LENGTH).optional(),
-  limit: z.number().int().positive().max(100).optional(),
-  cursor: z.string().max(MAX_CURSOR_LENGTH).optional(),
+  prefix: z.string().max(VAULT_LIMITS.maxPathLength).optional(),
+  limit: z.number().int().positive().max(VAULT_LIMITS.maxListLimit).optional(),
+  cursor: z.string().max(VAULT_LIMITS.maxCursorLength).optional(),
 }).strict();
 
 export const readFileInput = z.object({
-  path: z.string().min(1).max(MAX_PATH_LENGTH),
+  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
 }).strict();
 
+export const createFileInput = z.object({
+  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  content: z.string(),
+}).strict();
+
+export const editFileInput = z.object({
+  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  content: z.string(),
+  expectedRevision: z.string().min(1),
+}).strict();
+
+export const deleteFileInput = z.object({
+  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  expectedRevision: z.string().min(1),
+}).strict();
+
+export const moveFileInput = z.object({
+  from: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  to: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
+  expectedRevision: z.string().min(1),
+}).strict();
+
+export type VaultToolAuth = {
+  canRead?: () => boolean;
+  canWrite?: () => boolean;
+  allowedLogins?: Set<string>;
+};
+
 /** Creates a fresh stateless MCP server for one request. */
-export function createVaultMcpServer(rpc: VaultRpc): McpServer {
+export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): McpServer {
   const server = new McpServer({
     name: 'obsidian-livesync',
     version: '0.1.0',
   });
-  const handlers = createVaultToolHandlers(rpc);
+  const handlers = createVaultToolHandlers(rpc, auth);
+  const writeResult = z.object({ path: z.string(), revision: z.string() });
 
   server.registerTool(
     'vault_status',
     {
       description: 'Check whether the configured Obsidian LiveSync vault can be read.',
       outputSchema: z.object({
-        contractVersion: z.literal(1),
+        contractVersion: z.literal(CONTRACT_VERSION),
         compatible: z.boolean(),
         reasons: z.array(z.string()),
       }),
     },
     handlers.vaultStatus,
   );
-
   server.registerTool(
     'list_files',
     {
@@ -53,7 +95,6 @@ export function createVaultMcpServer(rpc: VaultRpc): McpServer {
     },
     handlers.listFiles,
   );
-
   server.registerTool(
     'read_file',
     {
@@ -63,21 +104,60 @@ export function createVaultMcpServer(rpc: VaultRpc): McpServer {
     },
     handlers.readFile,
   );
+  server.registerTool(
+    'create_file',
+    {
+      description: 'Create a new Markdown file in the configured vault.',
+      inputSchema: createFileInput,
+      outputSchema: writeResult,
+    },
+    handlers.createFile,
+  );
+  server.registerTool(
+    'edit_file',
+    {
+      description: 'Replace the contents of an existing Markdown file. Requires the current revision.',
+      inputSchema: editFileInput,
+      outputSchema: writeResult,
+    },
+    handlers.editFile,
+  );
+  server.registerTool(
+    'delete_file',
+    {
+      description: 'Delete a Markdown file. Requires the current revision.',
+      inputSchema: deleteFileInput,
+      outputSchema: writeResult,
+    },
+    handlers.deleteFile,
+  );
+  server.registerTool(
+    'move_file',
+    {
+      description: 'Move or rename a Markdown file. Requires the current revision of the source.',
+      inputSchema: moveFileInput,
+      outputSchema: z.object({ from: z.string(), to: z.string(), revision: z.string() }),
+    },
+    handlers.moveFile,
+  );
 
   return server;
 }
 
-export function createVaultToolHandlers(
-  rpc: VaultRpc,
-  canRead: () => boolean = () => hasReadScope(getMcpAuthContext()?.props),
-) {
-  const denied = () => ({
+export function createVaultToolHandlers(rpc: VaultRpc, auth: VaultToolAuth | (() => boolean) = {}) {
+  const resolved = typeof auth === 'function'
+    ? { canRead: auth, canWrite: auth }
+    : {
+      canRead: auth.canRead ?? (() => hasVaultAccess(getMcpAuthContext()?.props, auth.allowedLogins ?? new Set(), READ_SCOPE)),
+      canWrite: auth.canWrite ?? (() => hasVaultAccess(getMcpAuthContext()?.props, auth.allowedLogins ?? new Set(), WRITE_SCOPE)),
+    };
+  const denied = (scope: string) => ({
     isError: true as const,
-    content: [{ type: 'text' as const, text: 'Authorization requires the vault:read scope.' }],
+    content: [{ type: 'text' as const, text: `Authorization requires an allowlisted GitHub account with the ${scope} scope.` }],
   });
   return {
     vaultStatus: async () => {
-      if (!canRead()) return denied();
+      if (!resolved.canRead()) return denied(READ_SCOPE);
       const result = await rpc.vaultStatus();
       if (!result.ok) return vaultFailure(result);
       return success(
@@ -86,23 +166,65 @@ export function createVaultToolHandlers(
       );
     },
     listFiles: async (request: z.infer<typeof listFilesInput>) => {
-      if (!canRead()) return denied();
+      if (!resolved.canRead()) return denied(READ_SCOPE);
       const result = await rpc.listVaultFiles(request);
       if (!result.ok) return vaultFailure(result);
       return success(result.data, `${result.data.files.length} file(s) returned.`);
     },
     readFile: async (request: z.infer<typeof readFileInput>) => {
-      if (!canRead()) return denied();
+      if (!resolved.canRead()) return denied(READ_SCOPE);
       const result = await rpc.readVaultFile(request);
       if (!result.ok) return vaultFailure(result);
       return success(result.data, `Read ${result.data.path}.`);
+    },
+    createFile: async (request: z.infer<typeof createFileInput>) => {
+      if (!resolved.canWrite()) return denied(WRITE_SCOPE);
+      const result = await rpc.createVaultFile(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Created ${result.data.path}.`);
+    },
+    editFile: async (request: z.infer<typeof editFileInput>) => {
+      if (!resolved.canWrite()) return denied(WRITE_SCOPE);
+      const result = await rpc.updateVaultFile(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Updated ${result.data.path}.`);
+    },
+    deleteFile: async (request: z.infer<typeof deleteFileInput>) => {
+      if (!resolved.canWrite()) return denied(WRITE_SCOPE);
+      const result = await rpc.deleteVaultFile(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Deleted ${result.data.path}.`);
+    },
+    moveFile: async (request: z.infer<typeof moveFileInput>) => {
+      if (!resolved.canWrite()) return denied(WRITE_SCOPE);
+      const result = await rpc.moveVaultFile(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Moved ${result.data.from} to ${result.data.to}.`);
     },
   };
 }
 
 export function hasReadScope(props: Record<string, unknown> | undefined): boolean {
+  return hasScope(props, READ_SCOPE);
+}
+
+export function hasScope(props: Record<string, unknown> | undefined, scope: string): boolean {
   const scopes = props?.scopes;
-  return Array.isArray(scopes) && scopes.includes('vault:read');
+  return Array.isArray(scopes) && scopes.includes(scope);
+}
+
+export function hasVaultAccess(
+  props: Record<string, unknown> | undefined,
+  allowedLogins: Set<string>,
+  scope: string = READ_SCOPE,
+): boolean {
+  if (!hasScope(props, scope)) return false;
+  const login = typeof props?.githubLogin === 'string' ? normalizeGithubLogin(props.githubLogin) : '';
+  return login !== '' && allowedLogins.has(login);
+}
+
+export function allowlistFromEnv(env: { GITHUB_ALLOWED_LOGINS?: string }): Set<string> {
+  return allowedGithubLogins(env.GITHUB_ALLOWED_LOGINS);
 }
 
 function success<T extends object>(data: T, text: string) {
@@ -116,6 +238,5 @@ function vaultFailure(result: Exclude<VaultResult<unknown>, { ok: true }>) {
   return {
     isError: true as const,
     content: [{ type: 'text' as const, text: result.error.message }],
-    structuredContent: { error: result.error },
   };
 }
