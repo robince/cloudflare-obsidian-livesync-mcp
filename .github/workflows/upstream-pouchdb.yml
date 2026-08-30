@@ -1,0 +1,57 @@
+name: Upstream PouchDB compatibility
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * *"
+  push:
+    paths:
+      - package.json
+      - package-lock.json
+      - .github/workflows/upstream-pouchdb.yml
+      - test/current-pouchdb.test.ts
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - .github/workflows/upstream-pouchdb.yml
+      - test/current-pouchdb.test.ts
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Cloudflare LiveSync Worker
+        uses: actions/checkout@v4
+        with:
+          path: cloudflare-obsidian-livesync
+
+      - name: Check out upstream PouchDB
+        uses: actions/checkout@v4
+        with:
+          repository: pouchdb/pouchdb
+          path: pouchdb
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare-obsidian-livesync/package-lock.json
+
+      - name: Build upstream PouchDB modules
+        working-directory: pouchdb
+        run: |
+          npm install
+          npm run build-modules
+
+      - name: Install Worker dependencies
+        working-directory: cloudflare-obsidian-livesync
+        run: npm ci
+
+      - name: Run upstream compatibility suite
+        working-directory: cloudflare-obsidian-livesync
+        run: npm run test:upstream-pouchdb

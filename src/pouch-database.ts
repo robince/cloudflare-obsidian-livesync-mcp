@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
+import cloudflareDOAdapter from '@robince/pouchdb-adapter-cloudflare-do';
 import PouchDB from 'pouchdb-core';
-import cloudflareDOAdapter from 'pouchdb-adapter-cloudflare-do';
 
 import { booleanParam, couchError, json, jsonParam, pouchError, readJson } from './http';
 import { matchesSelector } from './selector';
