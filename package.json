@@ -1,0 +1,31 @@
+{
+  "name": "cloudflare-pouchdb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run test/worker.test.ts",
+    "test:current-pouchdb": "vitest run test/current-pouchdb.test.ts",
+    "test:all": "npm test && npm run test:current-pouchdb",
+    "types": "wrangler types",
+    "dry-run": "wrangler deploy --dry-run --outdir dist"
+  },
+  "dependencies": {
+    "pouchdb-adapter-cloudflare-do": "file:../pouchdb-adapter-sqlite/packages/pouchdb-adapter-cloudflare-do",
+    "pouchdb-adapter-http": "^9.0.0",
+    "pouchdb-adapter-sqlite-core": "file:../pouchdb-adapter-sqlite/packages/pouchdb-adapter-sqlite-core",
+    "pouchdb-core": "^9.0.0",
+    "pouchdb-replication": "^9.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.0",
+    "@types/node": "^24.0.0",
+    "@types/pouchdb-core": "^7.0.15",
+    "pouchdb-find": "^9.0.0",
+    "pouchdb-mapreduce": "^9.0.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.33.1"
+  }
+}
