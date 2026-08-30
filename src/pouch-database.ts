@@ -4,7 +4,15 @@ import PouchDB from 'pouchdb-core';
 
 import { booleanParam, couchError, json, jsonParam, pouchError, readJson } from './http';
 import { matchesSelector } from './selector';
+import { createInProcessCouchFetch } from './livesync-vault/in-process-couch-fetch';
+import {
+  inspectVaultProfile,
+  MILESTONE_DOCUMENT_ID,
+  SYNC_PARAMETERS_DOCUMENT_ID,
+  type VaultProfileInspection,
+} from './livesync-vault/profile';
 import type { DatabaseInfo, JsonObject } from './types';
+import type { CommonlibFacade } from './livesync-vault/commonlib';
 
 PouchDB.plugin(cloudflareDOAdapter);
 
@@ -34,6 +42,7 @@ interface FindRequest {
 export class PouchDatabase extends DurableObject<Env> {
   private db?: AnyDatabase;
   private dbName?: string;
+  private commonlibFacade?: Promise<CommonlibFacade>;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -114,6 +123,46 @@ export class PouchDatabase extends DurableObject<Env> {
     if (!this.exists()) {
       throw Object.assign(new Error('Database does not exist.'), { status: 404, name: 'not_found' });
     }
+  }
+
+  private commonlib(): Promise<CommonlibFacade> {
+    this.commonlibFacade ??= this.createCommonlib();
+    return this.commonlibFacade;
+  }
+
+  private async createCommonlib(): Promise<CommonlibFacade> {
+    this.requireExists();
+    if (!this.dbName) throw new Error('database identity is required');
+    const { CommonlibFacade } = await import('./livesync-vault/commonlib');
+    const profile = await this.inspectCommonlibProfile();
+    return new CommonlibFacade(
+      this.dbName,
+      this.inProcessCouchFetch(),
+      profile
+    );
+  }
+
+  private async inspectCommonlibProfile(): Promise<VaultProfileInspection> {
+    const db = this.database();
+    const getOptional = async (id: string): Promise<JsonObject | undefined> => {
+      try {
+        return await db.get(id) as JsonObject;
+      } catch (error) {
+        if (isMissingDocument(error)) return undefined;
+        throw error;
+      }
+    };
+    const [milestone, syncParameters] = await Promise.all([
+      getOptional(MILESTONE_DOCUMENT_ID),
+      getOptional(SYNC_PARAMETERS_DOCUMENT_ID),
+    ]);
+    return inspectVaultProfile(milestone, syncParameters);
+  }
+
+  private inProcessCouchFetch(): typeof globalThis.fetch {
+    if (!this.dbName) throw new Error('database identity is required');
+    const databaseName = this.dbName;
+    return createInProcessCouchFetch(databaseName, async (request) => await this.fetch(request));
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -461,6 +510,10 @@ function ensureDocumentSize(document: JsonObject): void {
       }
     }
   }
+}
+
+function isMissingDocument(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'status' in error && error.status === 404;
 }
 
 async function waitForChange(db: AnyDatabase, since: string | number, timeoutMs: number): Promise<void> {

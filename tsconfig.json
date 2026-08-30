@@ -6,6 +6,7 @@
     "lib": ["ES2022", "WebWorker"],
     "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-plugin/types", "node"],
     "strict": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true,
     "allowJs": false
