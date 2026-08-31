@@ -1,4 +1,4 @@
-# Read-only Obsidian LiveSync MCP Worker
+# Obsidian LiveSync MCP Worker
 
 This Worker exposes authenticated tools for one configured vault:
 `vault_status`, `list_files`, `read_file`, `create_file`, `edit_file`,
@@ -25,8 +25,8 @@ Register GitHub's callback URL as
 serves the MCP authorization metadata, PKCE token flow, Client ID Metadata
 Document support, and dynamic registration. The app handles a GitHub login and
 explicit consent page, then stores only the immutable GitHub user ID, normalized
-login, and granted `vault:read` scope in MCP token properties. It does not store
-the GitHub access token.
+login, and the granted `vault:read` and/or `vault:write` scopes in MCP token
+properties. It does not store the GitHub access token.
 
 Create and configure the `OAUTH_KV` namespace in the deployed Wrangler config;
 the committed preview ID is only a local placeholder. The Worker also needs the

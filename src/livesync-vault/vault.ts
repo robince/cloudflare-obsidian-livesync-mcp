@@ -124,7 +124,7 @@ export class LiveSyncVault {
         mtime: now,
         size: utf8Bytes(parsed.data.content),
       });
-      if (!written) return failure('internal', 'Could not create the file.');
+      if (!written) return failure('conflict', 'File already exists.');
       return success({ path: parsed.data.path, revision: written.revision });
     });
   }

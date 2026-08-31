@@ -9,7 +9,7 @@ import { createMcpHandler } from 'agents/mcp/server';
 
 import { allowedGithubLogins, normalizeGithubLogin } from './auth-utils';
 import { vaultRpcForEnv } from './vault-rpc';
-import { allowlistFromEnv, createVaultMcpServer, READ_SCOPE, WRITE_SCOPE } from './vault-tools';
+import { accessTokenScopes, allowlistFromEnv, createVaultMcpServer, READ_SCOPE, WRITE_SCOPE } from './vault-tools';
 const AUTH_STATE_TTL_SECONDS = 10 * 60;
 const CSRF_COOKIE = '__Host-obsidian-mcp-csrf';
 
@@ -61,10 +61,10 @@ function providerFor(env: Env): OAuthProvider<Env> {
     clientRegistrationEndpoint: '/oauth/register',
     clientIdMetadataDocumentEnabled: true,
     scopesSupported: [READ_SCOPE, WRITE_SCOPE],
-    tokenExchangeCallback: ({ props }) => ({
+    tokenExchangeCallback: ({ props, requestedScope }) => ({
       accessTokenProps: {
         ...props,
-        scopes: grantedScopes(props),
+        scopes: accessTokenScopes(props, requestedScope),
       },
     }),
     resourceMetadata: {
@@ -113,7 +113,10 @@ async function startAuthorization(request: Request, env: OAuthEnv): Promise<Resp
     JSON.stringify({ request: authorization, session: csrf } satisfies GithubAuthorizationState),
     { expirationTtl: AUTH_STATE_TTL_SECONDS },
   );
-  return htmlResponse(consentPage(id, csrf, client.clientName ?? 'MCP client'), csrfCookie(csrf));
+  return htmlResponse(
+    consentPage(id, csrf, client.clientName ?? 'MCP client', authorization.scope),
+    csrfCookie(csrf),
+  );
 }
 
 async function continueToGithub(request: Request, env: OAuthEnv): Promise<Response> {
@@ -241,7 +244,12 @@ function grantedScopes(props: { scopes?: unknown } | undefined): string[] {
 }
 
 function publicOrigin(env: Env): URL {
-  const url = new URL(env.MCP_PUBLIC_BASE_URL);
+  let url: URL;
+  try {
+    url = new URL(env.MCP_PUBLIC_BASE_URL);
+  } catch {
+    throw new Error('MCP_PUBLIC_BASE_URL must be an HTTPS origin without a path.');
+  }
   if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash) {
     throw new Error('MCP_PUBLIC_BASE_URL must be an HTTPS origin without a path.');
   }
@@ -314,8 +322,11 @@ function githubSecrets(env: Env): GithubSecrets {
   return env as unknown as GithubSecrets;
 }
 
-function consentPage(authorizationId: string, csrf: string, clientName: string): string {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>${escapeHtml(clientName)} requests access to list, read, and edit Markdown files in your configured vault.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
+function consentPage(authorizationId: string, csrf: string, clientName: string, scopes: string[]): string {
+  const access = scopes.includes(WRITE_SCOPE)
+    ? 'list, read, and edit Markdown files'
+    : 'list and read Markdown files';
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>${escapeHtml(clientName)} requests access to ${access} in your configured vault.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
 }
 
 function htmlResponse(body: string, setCookie: string): Response {
@@ -343,7 +354,10 @@ export default {
       return providerFor(env).fetch(request, env, ctx);
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      if (message.includes('MCP_PUBLIC_BASE_URL')) {
+      if (
+        message.includes('MCP_PUBLIC_BASE_URL')
+        || (error instanceof TypeError && message.includes('Invalid URL'))
+      ) {
         return Promise.resolve(new Response('MCP_PUBLIC_BASE_URL is invalid.', { status: 500 }));
       }
       throw error;

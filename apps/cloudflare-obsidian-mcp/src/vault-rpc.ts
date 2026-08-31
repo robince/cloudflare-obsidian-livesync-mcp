@@ -16,6 +16,10 @@ import type {
 /** Matches the storage Worker's CouchDB database-name rule. */
 export const VAULT_DATABASE_NAME = /^[a-z][a-z0-9_$()+-]*$/;
 
+export function isVaultDatabaseName(value: unknown): value is string {
+  return typeof value === 'string' && VAULT_DATABASE_NAME.test(value);
+}
+
 /** The semantic vault surface shared with the storage Worker. */
 export interface VaultRpc {
   vaultStatus(): Promise<VaultResult<VaultStatusData>>;
@@ -30,7 +34,7 @@ export interface VaultRpc {
 function unavailableRpc(): VaultRpc {
   const invalid: VaultResult<never> = {
     ok: false,
-    error: { code: 'internal', message: 'VAULT_DATABASE is not a valid CouchDB name.' },
+    error: { code: 'unavailable', message: 'VAULT_DATABASE is not a valid CouchDB name.' },
   };
   return {
     vaultStatus: async () => invalid,
@@ -48,6 +52,6 @@ function unavailableRpc(): VaultRpc {
  * from the Worker environment; MCP callers never influence this selection.
  */
 export function vaultRpcForEnv(env: Env): VaultRpc {
-  if (!VAULT_DATABASE_NAME.test(env.VAULT_DATABASE)) return unavailableRpc();
+  if (!isVaultDatabaseName(env.VAULT_DATABASE)) return unavailableRpc();
   return env.POUCH_DATABASES.getByName(env.VAULT_DATABASE) as unknown as VaultRpc;
 }

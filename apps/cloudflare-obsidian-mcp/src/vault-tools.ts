@@ -14,6 +14,19 @@ import type { VaultRpc } from './vault-rpc';
 export const READ_SCOPE = 'vault:read';
 export const WRITE_SCOPE = 'vault:write';
 
+export function accessTokenScopes(props: { scopes?: unknown } | undefined, requestedScope: unknown): string[] {
+  const granted = Array.isArray(props?.scopes) ? props.scopes.filter((scope) => scope === READ_SCOPE || scope === WRITE_SCOPE) : [];
+  const uniqueGranted = [...new Set(granted)];
+  const requested = Array.isArray(requestedScope)
+    ? requestedScope.filter((scope): scope is string => typeof scope === 'string')
+    : typeof requestedScope === 'string'
+      ? requestedScope.split(/[\s+]+/).filter(Boolean)
+      : [];
+  if (requested.length === 0) return uniqueGranted;
+  const narrowed = uniqueGranted.filter((scope) => requested.includes(scope));
+  return narrowed.length > 0 ? narrowed : uniqueGranted.filter((scope) => scope === READ_SCOPE);
+}
+
 export const VAULT_TOOL_NAMES = [
   'vault_status',
   'list_files',

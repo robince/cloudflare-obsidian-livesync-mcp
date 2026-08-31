@@ -107,16 +107,18 @@ describe('read-only vault RPC', () => {
   });
 
   it('retries Commonlib construction after a rejected create', async () => {
-    const name = databaseName('sticky-create');
-    const stub = env.POUCH_DATABASES.getByName(name);
+    const { stub } = await seededVault('sticky-create');
+    await runInDurableObject(stub, (instance: PouchDatabase) => {
+      const failed = Promise.reject(Object.assign(new Error('transient'), { status: 503 }));
+      void failed.catch(() => undefined);
+      instance['commonlibCreate'] = failed;
+    });
     await expect(stub.listVaultFiles({})).resolves.toMatchObject({
       ok: false,
-      error: { code: 'not_found' },
+      error: { code: 'unavailable' },
     });
-    const { stub: seeded } = await seededVault('sticky-create-ok');
-    await expect(seeded.vaultStatus()).resolves.toMatchObject({
+    await expect(stub.listVaultFiles({})).resolves.toMatchObject({
       ok: true,
-      data: { compatible: true },
     });
   });
 

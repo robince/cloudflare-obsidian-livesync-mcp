@@ -61,6 +61,7 @@ export class PouchDatabase extends DurableObject<Env> {
   private commonlibFingerprint?: string;
   private commonlibRefs = 0;
   private commonlibCreate?: Promise<CommonlibFacade>;
+  private commonlibIdleWaiters: Array<() => void> = [];
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -188,12 +189,20 @@ export class PouchDatabase extends DurableObject<Env> {
 
   private async acquireCommonlib(): Promise<CommonlibFacade> {
     this.requireExists();
-    const profile = await this.inspectCommonlibProfile();
+    let profile = await this.inspectCommonlibProfile();
     if (!profile.supported) {
       throw new Error(`unsupported LiveSync profile (${profile.reasons.join(', ')})`);
     }
-    if (this.commonlibFacade && this.commonlibFingerprint !== profile.fingerprint) {
-      if (this.commonlibRefs === 0) await this.disposeCommonlib();
+    while (this.commonlibFacade && this.commonlibFingerprint !== profile.fingerprint) {
+      if (this.commonlibRefs === 0) {
+        await this.disposeCommonlib();
+        break;
+      }
+      await this.waitForCommonlibIdle();
+      profile = await this.inspectCommonlibProfile();
+      if (!profile.supported) {
+        throw new Error(`unsupported LiveSync profile (${profile.reasons.join(', ')})`);
+      }
     }
     if (!this.commonlibFacade) {
       const creating = this.commonlibCreate ?? this.createCommonlib(profile);
@@ -221,6 +230,16 @@ export class PouchDatabase extends DurableObject<Env> {
     if (this.commonlibRefs === 0) await this.disposeCommonlib();
   }
 
+  private waitForCommonlibIdle(): Promise<void> {
+    return new Promise((resolve) => this.commonlibIdleWaiters.push(resolve));
+  }
+
+  private notifyCommonlibIdle(): void {
+    const waiters = this.commonlibIdleWaiters;
+    this.commonlibIdleWaiters = [];
+    for (const waiter of waiters) waiter();
+  }
+
   private async disposeCommonlib(): Promise<void> {
     const facade = this.commonlibFacade;
     this.commonlibFacade = undefined;
@@ -228,6 +247,7 @@ export class PouchDatabase extends DurableObject<Env> {
     this.commonlibRefs = 0;
     this.commonlibCreate = undefined;
     if (facade) await facade.close().catch(() => undefined);
+    this.notifyCommonlibIdle();
   }
 
   private async createCommonlib(profile: VaultProfileInspection): Promise<CommonlibFacade> {

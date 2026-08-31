@@ -88,7 +88,8 @@ describe('production dependency provenance', () => {
         },
       },
     };
-    assert.notDeepEqual(validateProductionDependencies({ manifest, lockfile, registry }), []);
+    const problems = validateProductionDependencies({ manifest, lockfile, registry });
+    assert.ok(problems.some((problem) => problem.includes('apps/mcp/node_modules/poisoned')));
   });
 
   it('rejects a poisoned transitive production dependency marked dev', () => {

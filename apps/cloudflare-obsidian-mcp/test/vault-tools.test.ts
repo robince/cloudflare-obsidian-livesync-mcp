@@ -2,15 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import { allowedGithubLogins, normalizeGithubLogin } from '../src/auth-utils';
 import {
+  accessTokenScopes,
   createVaultMcpServer,
   createVaultToolHandlers,
   hasReadScope,
   hasVaultAccess,
   listFilesInput,
   readFileInput,
+  WRITE_SCOPE,
   VAULT_TOOL_NAMES,
 } from '../src/vault-tools';
-import { VAULT_DATABASE_NAME } from '../src/vault-rpc';
+import { isVaultDatabaseName, VAULT_DATABASE_NAME } from '../src/vault-rpc';
 import type { VaultRpc } from '../src/vault-rpc';
 
 const fakeRpc: VaultRpc = {
@@ -37,7 +39,7 @@ const fakeRpc: VaultRpc = {
   },
 };
 
-describe('read-only MCP surface', () => {
+describe('MCP vault surface', () => {
   it('registers the vault tools', () => {
     expect(VAULT_TOOL_NAMES).toEqual([
       'vault_status',
@@ -79,6 +81,12 @@ describe('read-only MCP surface', () => {
 
     const denied = createVaultToolHandlers(fakeRpc, () => false);
     await expect(denied.readFile({ path: 'notes/a.md' })).resolves.toMatchObject({ isError: true });
+
+    const readOnly = createVaultToolHandlers(fakeRpc, { canRead: () => true, canWrite: () => false });
+    await expect(readOnly.createFile({ path: 'notes/b.md', content: '# B\n' })).resolves.toMatchObject({ isError: true });
+    await expect(readOnly.editFile({ path: 'notes/a.md', content: '# A\n', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
+    await expect(readOnly.deleteFile({ path: 'notes/a.md', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
+    await expect(readOnly.moveFile({ from: 'notes/a.md', to: 'notes/c.md', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
   });
 
   it('registers tools and denies the default auth context', async () => {
@@ -104,6 +112,8 @@ describe('read-only MCP surface', () => {
     expect(VAULT_DATABASE_NAME.test('vault')).toBe(true);
     expect(VAULT_DATABASE_NAME.test('Vault')).toBe(false);
     expect(VAULT_DATABASE_NAME.test('')).toBe(false);
+    expect(isVaultDatabaseName(undefined)).toBe(false);
+    expect(isVaultDatabaseName('undefined')).toBe(true);
   });
 });
 
@@ -120,5 +130,13 @@ describe('GitHub allowlist', () => {
     expect(hasVaultAccess(props, new Set(['robince']))).toBe(true);
     expect(hasVaultAccess(props, new Set())).toBe(false);
     expect(hasVaultAccess({ githubLogin: 'robince', scopes: [] }, new Set(['robince']))).toBe(false);
+    expect(hasVaultAccess(props, new Set(['robince']), WRITE_SCOPE)).toBe(false);
+  });
+
+  it('does not let a read-only token exchange keep write scope', () => {
+    const grant = { scopes: ['vault:read', 'vault:write'] };
+    expect(accessTokenScopes(grant, ['vault:read'])).toEqual(['vault:read']);
+    expect(accessTokenScopes(grant, ['vault:read', 'vault:write'])).toEqual(['vault:read', 'vault:write']);
+    expect(accessTokenScopes(grant, undefined)).toEqual(['vault:read', 'vault:write']);
   });
 });

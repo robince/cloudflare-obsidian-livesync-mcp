@@ -115,13 +115,21 @@ export class CommonlibFacade {
     };
     const db = this.manipulator.liveSyncLocalDB;
     try {
+      if (!expectedRevision) {
+        try {
+          const current = await db.getRaw(documentId);
+          if (current && current._rev && !isDeleted(current)) return false;
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
+      }
       const result = expectedRevision
         ? await db.putDBEntryWithLiveBaseRevision(note, expectedRevision)
         : await db.putDBEntry(note);
       if (!result || typeof result.rev !== 'string') return false;
       return { revision: result.rev };
     } catch (error) {
-      if (isConflict(error)) return false;
+      if (isConflict(error) || isMissing(error)) return false;
       throw error;
     }
   }
