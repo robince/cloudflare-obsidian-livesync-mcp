@@ -3,7 +3,6 @@ import {
   createVaultFileRequestSchema,
   deleteVaultFileRequestSchema,
   listVaultFilesRequestSchema,
-  moveVaultFileRequestSchema,
   readVaultFileRequestSchema,
   updateVaultFileRequestSchema,
   VAULT_LIMITS,
@@ -11,8 +10,6 @@ import {
   type DeleteVaultFileRequest,
   type ListVaultFilesRequest,
   type ListVaultFilesData,
-  type MoveVaultFileData,
-  type MoveVaultFileRequest,
   type ReadVaultFileRequest,
   type ReadVaultFileData,
   type UpdateVaultFileRequest,
@@ -173,42 +170,6 @@ export class LiveSyncVault {
       const removed = await commonlib.remove(parsed.data.path, parsed.data.expectedRevision);
       if (!removed) return failure('conflict', 'The file was modified by another client.');
       return success({ path: parsed.data.path, revision: removed.revision });
-    });
-  }
-
-  async move(request: MoveVaultFileRequest): Promise<VaultResult<MoveVaultFileData>> {
-    const parsed = moveVaultFileRequestSchema.safeParse(request);
-    if (!parsed.success || !isMarkdownPath(parsed.data?.from ?? '') || !isMarkdownPath(parsed.data?.to ?? '')) {
-      return failure('invalid_input', 'Paths must be safe relative Markdown files.');
-    }
-
-    return this.withCommonlib(async (commonlib) => {
-      const source = await commonlib.read(parsed.data.from);
-      if (!source) return failure('not_found', 'File not found.');
-      if (source.revision !== parsed.data.expectedRevision) {
-        return failure('conflict', 'The file was modified by another client.');
-      }
-      const sizeError = contentTooLarge(source.content);
-      if (sizeError) return sizeError;
-      const sourceId = await commonlib.documentId(parsed.data.from);
-      const destId = await commonlib.documentId(parsed.data.to);
-      const destination = await commonlib.inspect(parsed.data.to);
-      if (destination && sourceId !== destId) {
-        return failure('conflict', 'A file already exists at the destination.');
-      }
-      const now = Date.now();
-      const written = await commonlib.write(
-        parsed.data.to,
-        source.content,
-        { ctime: now, mtime: now, size: utf8Bytes(source.content) },
-        sourceId === destId ? parsed.data.expectedRevision : undefined
-      );
-      if (!written) return failure('conflict', 'Could not write the destination file.');
-      if (sourceId !== destId) {
-        const removed = await commonlib.remove(parsed.data.from, parsed.data.expectedRevision);
-        if (!removed) return failure('internal', 'Moved the file but could not remove the original path.');
-      }
-      return success({ from: parsed.data.from, to: parsed.data.to, revision: written.revision });
     });
   }
 

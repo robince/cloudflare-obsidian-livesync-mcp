@@ -2,6 +2,9 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "cloudflare-pouchdb",
   "main": "src/index.ts",
+  "alias": {
+    "octagonal-wheels/hash/xxhash.js": "./src/livesync-vault/worker-xxhash.ts"
+  },
   "compatibility_date": "2026-08-26",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {

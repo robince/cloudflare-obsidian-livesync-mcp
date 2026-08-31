@@ -89,7 +89,9 @@ describe('production dependency provenance', () => {
       },
     };
     const problems = validateProductionDependencies({ manifest, lockfile, registry });
-    assert.ok(problems.some((problem) => problem.includes('apps/mcp/node_modules/poisoned')));
+    assert.ok(problems.includes(
+      'apps/mcp/node_modules/poisoned: resolves outside the configured npm registry: git+https://github.com/example/poisoned.git'
+    ));
   });
 
   it('rejects a poisoned transitive production dependency marked dev', () => {

@@ -3,8 +3,6 @@ import type {
   DeleteVaultFileRequest,
   ListVaultFilesData,
   ListVaultFilesRequest,
-  MoveVaultFileData,
-  MoveVaultFileRequest,
   ReadVaultFileData,
   ReadVaultFileRequest,
   UpdateVaultFileRequest,
@@ -15,6 +13,11 @@ import type {
 
 /** Matches the storage Worker's CouchDB database-name rule. */
 export const VAULT_DATABASE_NAME = /^[a-z][a-z0-9_$()+-]*$/;
+
+type VaultRpcEnv = {
+  VAULT_DATABASE?: unknown;
+  POUCH_DATABASES: { getByName(name: string): unknown };
+};
 
 export function isVaultDatabaseName(value: unknown): value is string {
   return typeof value === 'string' && VAULT_DATABASE_NAME.test(value);
@@ -28,7 +31,6 @@ export interface VaultRpc {
   createVaultFile(request: CreateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>>;
   updateVaultFile(request: UpdateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>>;
   deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>>;
-  moveVaultFile(request: MoveVaultFileRequest): Promise<VaultResult<MoveVaultFileData>>;
 }
 
 function unavailableRpc(): VaultRpc {
@@ -43,7 +45,6 @@ function unavailableRpc(): VaultRpc {
     createVaultFile: async () => invalid,
     updateVaultFile: async () => invalid,
     deleteVaultFile: async () => invalid,
-    moveVaultFile: async () => invalid,
   };
 }
 
@@ -51,7 +52,7 @@ function unavailableRpc(): VaultRpc {
  * Gets the fixed vault Durable Object. The database name comes exclusively
  * from the Worker environment; MCP callers never influence this selection.
  */
-export function vaultRpcForEnv(env: Env): VaultRpc {
+export function vaultRpcForEnv(env: VaultRpcEnv): VaultRpc {
   if (!isVaultDatabaseName(env.VAULT_DATABASE)) return unavailableRpc();
   return env.POUCH_DATABASES.getByName(env.VAULT_DATABASE) as unknown as VaultRpc;
 }

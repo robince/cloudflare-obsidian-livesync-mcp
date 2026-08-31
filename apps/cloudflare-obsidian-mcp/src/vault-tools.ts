@@ -22,9 +22,8 @@ export function accessTokenScopes(props: { scopes?: unknown } | undefined, reque
     : typeof requestedScope === 'string'
       ? requestedScope.split(/[\s+]+/).filter(Boolean)
       : [];
-  if (requested.length === 0) return uniqueGranted;
-  const narrowed = uniqueGranted.filter((scope) => requested.includes(scope));
-  return narrowed.length > 0 ? narrowed : uniqueGranted.filter((scope) => scope === READ_SCOPE);
+  if (requestedScope === undefined) return uniqueGranted;
+  return uniqueGranted.filter((scope) => requested.includes(scope));
 }
 
 export const VAULT_TOOL_NAMES = [
@@ -34,7 +33,6 @@ export const VAULT_TOOL_NAMES = [
   'create_file',
   'edit_file',
   'delete_file',
-  'move_file',
 ] as const;
 
 export const listFilesInput = z.object({
@@ -49,30 +47,25 @@ export const readFileInput = z.object({
 
 export const createFileInput = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: z.string(),
+  content: z.string().max(VAULT_LIMITS.maxWriteBytes),
 }).strict();
 
 export const editFileInput = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: z.string(),
-  expectedRevision: z.string().min(1),
+  content: z.string().max(VAULT_LIMITS.maxWriteBytes),
+  expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
 }).strict();
 
 export const deleteFileInput = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  expectedRevision: z.string().min(1),
-}).strict();
-
-export const moveFileInput = z.object({
-  from: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  to: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  expectedRevision: z.string().min(1),
+  expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
 }).strict();
 
 export type VaultToolAuth = {
   canRead?: () => boolean;
   canWrite?: () => boolean;
   allowedLogins?: Set<string>;
+  writesEnabled?: boolean;
 };
 
 /** Creates a fresh stateless MCP server for one request. */
@@ -117,53 +110,49 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     },
     handlers.readFile,
   );
-  server.registerTool(
-    'create_file',
-    {
-      description: 'Create a new Markdown file in the configured vault.',
-      inputSchema: createFileInput,
-      outputSchema: writeResult,
-    },
-    handlers.createFile,
-  );
-  server.registerTool(
-    'edit_file',
-    {
-      description: 'Replace the contents of an existing Markdown file. Requires the current revision.',
-      inputSchema: editFileInput,
-      outputSchema: writeResult,
-    },
-    handlers.editFile,
-  );
-  server.registerTool(
-    'delete_file',
-    {
-      description: 'Delete a Markdown file. Requires the current revision.',
-      inputSchema: deleteFileInput,
-      outputSchema: writeResult,
-    },
-    handlers.deleteFile,
-  );
-  server.registerTool(
-    'move_file',
-    {
-      description: 'Move or rename a Markdown file. Requires the current revision of the source.',
-      inputSchema: moveFileInput,
-      outputSchema: z.object({ from: z.string(), to: z.string(), revision: z.string() }),
-    },
-    handlers.moveFile,
-  );
-
+  if (auth.writesEnabled === true) {
+    server.registerTool(
+      'create_file',
+      {
+        description: 'Create a new Markdown file in the configured vault.',
+        inputSchema: createFileInput,
+        outputSchema: writeResult,
+      },
+      handlers.createFile,
+    );
+    server.registerTool(
+      'edit_file',
+      {
+        description: 'Replace the contents of an existing Markdown file. Requires the current revision.',
+        inputSchema: editFileInput,
+        outputSchema: writeResult,
+      },
+      handlers.editFile,
+    );
+    server.registerTool(
+      'delete_file',
+      {
+        description: 'Delete a Markdown file. Requires the current revision.',
+        inputSchema: deleteFileInput,
+        outputSchema: writeResult,
+      },
+      handlers.deleteFile,
+    );
+  }
   return server;
 }
 
-export function createVaultToolHandlers(rpc: VaultRpc, auth: VaultToolAuth | (() => boolean) = {}) {
-  const resolved = typeof auth === 'function'
-    ? { canRead: auth, canWrite: auth }
-    : {
-      canRead: auth.canRead ?? (() => hasVaultAccess(getMcpAuthContext()?.props, auth.allowedLogins ?? new Set(), READ_SCOPE)),
-      canWrite: auth.canWrite ?? (() => hasVaultAccess(getMcpAuthContext()?.props, auth.allowedLogins ?? new Set(), WRITE_SCOPE)),
-    };
+export function createVaultToolHandlers(rpc: VaultRpc, auth: VaultToolAuth = {}) {
+  const allowedLogins = auth.allowedLogins ?? new Set<string>();
+  const resolved = {
+    writesEnabled: auth.writesEnabled === true,
+    canRead: auth.canRead ?? (() => hasVaultAccess(getMcpAuthContext()?.props, allowedLogins, READ_SCOPE)),
+    canWrite: auth.canWrite ?? (() => {
+      const props = getMcpAuthContext()?.props;
+      return hasVaultAccess(props, allowedLogins, READ_SCOPE)
+        && hasVaultAccess(props, allowedLogins, WRITE_SCOPE);
+    }),
+  };
   const denied = (scope: string) => ({
     isError: true as const,
     content: [{ type: 'text' as const, text: `Authorization requires an allowlisted GitHub account with the ${scope} scope.` }],
@@ -175,7 +164,7 @@ export function createVaultToolHandlers(rpc: VaultRpc, auth: VaultToolAuth | (()
       if (!result.ok) return vaultFailure(result);
       return success(
         result.data,
-        result.data.compatible ? 'Vault is ready for read-only access.' : 'Vault configuration is unsupported.',
+        result.data.compatible ? 'Vault is ready.' : 'Vault configuration is unsupported.',
       );
     },
     listFiles: async (request: z.infer<typeof listFilesInput>) => {
@@ -191,28 +180,22 @@ export function createVaultToolHandlers(rpc: VaultRpc, auth: VaultToolAuth | (()
       return success(result.data, `Read ${result.data.path}.`);
     },
     createFile: async (request: z.infer<typeof createFileInput>) => {
-      if (!resolved.canWrite()) return denied(WRITE_SCOPE);
+      if (!resolved.writesEnabled || !resolved.canRead() || !resolved.canWrite()) return denied(WRITE_SCOPE);
       const result = await rpc.createVaultFile(request);
       if (!result.ok) return vaultFailure(result);
       return success(result.data, `Created ${result.data.path}.`);
     },
     editFile: async (request: z.infer<typeof editFileInput>) => {
-      if (!resolved.canWrite()) return denied(WRITE_SCOPE);
+      if (!resolved.writesEnabled || !resolved.canRead() || !resolved.canWrite()) return denied(WRITE_SCOPE);
       const result = await rpc.updateVaultFile(request);
       if (!result.ok) return vaultFailure(result);
       return success(result.data, `Updated ${result.data.path}.`);
     },
     deleteFile: async (request: z.infer<typeof deleteFileInput>) => {
-      if (!resolved.canWrite()) return denied(WRITE_SCOPE);
+      if (!resolved.writesEnabled || !resolved.canRead() || !resolved.canWrite()) return denied(WRITE_SCOPE);
       const result = await rpc.deleteVaultFile(request);
       if (!result.ok) return vaultFailure(result);
       return success(result.data, `Deleted ${result.data.path}.`);
-    },
-    moveFile: async (request: z.infer<typeof moveFileInput>) => {
-      if (!resolved.canWrite()) return denied(WRITE_SCOPE);
-      const result = await rpc.moveVaultFile(request);
-      if (!result.ok) return vaultFailure(result);
-      return success(result.data, `Moved ${result.data.from} to ${result.data.to}.`);
     },
   };
 }

@@ -8,10 +8,11 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "node scripts/patch-commonlib-create-cas.mjs",
     "check": "npm run check:dependencies && npm run check:storage && npm run check --workspaces --if-present",
     "check:dependencies": "node --test test/production-dependencies.test.mjs && node scripts/check-production-dependencies.mjs",
     "check:storage": "tsc --noEmit",
-    "test": "npm run test:dependencies && vitest run test/worker.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts",
+    "test": "npm run test:dependencies && vitest run test/worker.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts && vitest run test/mcp-storage-integration.test.ts",
     "test:dependencies": "node --test test/production-dependencies.test.mjs",
     "fixture:livesync": "node scripts/generate-livesync-fixture.mjs",
     "test:current-pouchdb": "vitest run test/current-pouchdb.test.ts",
@@ -31,10 +32,12 @@
     "pouchdb-adapter-http": "^9.0.0",
     "pouchdb-adapter-sqlite-core": "npm:@robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0",
     "pouchdb-core": "^9.0.0",
-    "pouchdb-replication": "^9.0.0"
+    "pouchdb-replication": "^9.0.0",
+    "xxhash-wasm-102": "npm:xxhash-wasm@1.1.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.0",
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "^24.0.0",
     "@types/pouchdb-core": "^7.0.15",
     "pouchdb-find": "^9.0.0",

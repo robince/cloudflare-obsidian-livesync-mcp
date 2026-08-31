@@ -2,8 +2,8 @@
 
 This Worker exposes authenticated tools for one configured vault:
 `vault_status`, `list_files`, `read_file`, `create_file`, `edit_file`,
-`delete_file`, and `move_file`. It never accepts a database name from an MCP
-client. Writes require the current document revision.
+and `delete_file`. It never accepts a database name from an MCP client. Editing
+and deletion require the current document revision; creation is create-only.
 
 ## Configure
 
@@ -14,6 +14,8 @@ Set these non-secret Worker variables before deployment:
   `https://vault-mcp.example.com`; no path is allowed.
 - `GITHUB_ALLOWED_LOGINS` — a comma- or whitespace-separated GitHub login
   allowlist. An empty value allows nobody.
+- `MCP_WRITES_ENABLED` — exact string `true` enables write tools. Every other
+  value disables them; the committed default is `false`.
 
 Set these Worker secrets through Wrangler or the Cloudflare dashboard:
 
@@ -27,6 +29,11 @@ Document support, and dynamic registration. The app handles a GitHub login and
 explicit consent page, then stores only the immutable GitHub user ID, normalized
 login, and the granted `vault:read` and/or `vault:write` scopes in MCP token
 properties. It does not store the GitHub access token.
+
+When writes are disabled, the Worker advertises only `vault:read` and does not
+register write tools. When enabled, every create, edit, and delete checks the
+kill switch again and requires both `vault:read` and `vault:write`, as well as
+the current runtime allowlist.
 
 Create and configure the `OAUTH_KV` namespace in the deployed Wrangler config;
 the committed preview ID is only a local placeholder. The Worker also needs the

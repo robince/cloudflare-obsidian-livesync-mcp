@@ -9,6 +9,7 @@ export type VaultProfileInspection =
       fingerprint: string;
       enableCompression: boolean;
       handleFilenameCaseSensitive: boolean;
+      hashAlg: 'xxhash64';
     }
   | { supported: false; fingerprint: string; reasons: string[] };
 
@@ -25,6 +26,7 @@ export function inspectVaultProfile(
   if (preferred) {
     if (preferred.encrypt !== false) reasons.push('encryption_unsupported');
     if (preferred.usePathObfuscation !== false) reasons.push('path_obfuscation_unsupported');
+    if (preferred.hashAlg !== 'xxhash64') reasons.push('hash_algorithm_unsupported');
   }
   if (reasons.length > 0) return { supported: false, fingerprint, reasons: [...new Set(reasons)] };
   return {
@@ -32,6 +34,7 @@ export function inspectVaultProfile(
     fingerprint,
     enableCompression: preferred!.enableCompression === true,
     handleFilenameCaseSensitive: preferred!.handleFilenameCaseSensitive === true,
+    hashAlg: 'xxhash64',
   };
 }
 

@@ -34,9 +34,6 @@ const fakeRpc: VaultRpc = {
   async deleteVaultFile({ path }) {
     return { ok: true, data: { path, revision: '2-del' } };
   },
-  async moveVaultFile({ from, to }) {
-    return { ok: true, data: { from, to, revision: '2-move' } };
-  },
 };
 
 describe('MCP vault surface', () => {
@@ -48,8 +45,12 @@ describe('MCP vault surface', () => {
       'create_file',
       'edit_file',
       'delete_file',
-      'move_file',
     ]);
+    const disabled = createVaultMcpServer(fakeRpc, { writesEnabled: false });
+    const enabled = createVaultMcpServer(fakeRpc, { writesEnabled: true });
+    const registered = (server: unknown) => Object.keys((server as { _registeredTools: object })._registeredTools);
+    expect(registered(disabled)).toEqual(['vault_status', 'list_files', 'read_file']);
+    expect(registered(enabled)).toEqual(VAULT_TOOL_NAMES);
   });
 
   it('does not accept a database selector in tool input', () => {
@@ -64,8 +65,12 @@ describe('MCP vault surface', () => {
     expect(hasReadScope({ scopes: ['vault:read'] })).toBe(true);
   });
 
-  it('executes the real handlers against a fake read-only RPC', async () => {
-    const allowed = createVaultToolHandlers(fakeRpc, () => true);
+  it('executes the real handlers against a fake RPC', async () => {
+    const allowed = createVaultToolHandlers(fakeRpc, {
+      writesEnabled: true,
+      canRead: () => true,
+      canWrite: () => true,
+    });
     await expect(allowed.vaultStatus()).resolves.toMatchObject({
       structuredContent: { contractVersion: 1, compatible: true },
     });
@@ -79,14 +84,31 @@ describe('MCP vault surface', () => {
       structuredContent: { path: 'notes/b.md', revision: '1-new' },
     });
 
-    const denied = createVaultToolHandlers(fakeRpc, () => false);
+    const denied = createVaultToolHandlers(fakeRpc, { canRead: () => false });
     await expect(denied.readFile({ path: 'notes/a.md' })).resolves.toMatchObject({ isError: true });
 
-    const readOnly = createVaultToolHandlers(fakeRpc, { canRead: () => true, canWrite: () => false });
+    const readOnly = createVaultToolHandlers(fakeRpc, {
+      writesEnabled: true,
+      canRead: () => true,
+      canWrite: () => false,
+    });
     await expect(readOnly.createFile({ path: 'notes/b.md', content: '# B\n' })).resolves.toMatchObject({ isError: true });
     await expect(readOnly.editFile({ path: 'notes/a.md', content: '# A\n', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
     await expect(readOnly.deleteFile({ path: 'notes/a.md', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
-    await expect(readOnly.moveFile({ from: 'notes/a.md', to: 'notes/c.md', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
+
+    const disabled = createVaultToolHandlers(fakeRpc, {
+      writesEnabled: false,
+      canRead: () => true,
+      canWrite: () => true,
+    });
+    await expect(disabled.createFile({ path: 'notes/b.md', content: '# B\n' })).resolves.toMatchObject({ isError: true });
+
+    const writeOnly = createVaultToolHandlers(fakeRpc, {
+      writesEnabled: true,
+      canRead: () => false,
+      canWrite: () => true,
+    });
+    await expect(writeOnly.createFile({ path: 'notes/b.md', content: '# B\n' })).resolves.toMatchObject({ isError: true });
   });
 
   it('registers tools and denies the default auth context', async () => {
@@ -102,7 +124,7 @@ describe('MCP vault surface', () => {
         return { ok: false, error: { code: 'not_found', message: 'File not found.' } };
       },
     };
-    const handlers = createVaultToolHandlers(failing, () => true);
+    const handlers = createVaultToolHandlers(failing, { canRead: () => true });
     const result = await handlers.readFile({ path: 'notes/missing.md' });
     expect(result).toMatchObject({ isError: true });
     expect(result).not.toHaveProperty('structuredContent');
@@ -138,5 +160,7 @@ describe('GitHub allowlist', () => {
     expect(accessTokenScopes(grant, ['vault:read'])).toEqual(['vault:read']);
     expect(accessTokenScopes(grant, ['vault:read', 'vault:write'])).toEqual(['vault:read', 'vault:write']);
     expect(accessTokenScopes(grant, undefined)).toEqual(['vault:read', 'vault:write']);
+    expect(accessTokenScopes(grant, [])).toEqual([]);
+    expect(accessTokenScopes(grant, ['unknown'])).toEqual([]);
   });
 });

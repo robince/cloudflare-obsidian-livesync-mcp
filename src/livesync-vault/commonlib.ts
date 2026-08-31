@@ -49,9 +49,7 @@ export class CommonlibFacade {
       obfuscatePassphrase: undefined,
       enableCompression: profile.enableCompression,
       handleFilenameCaseSensitive: profile.handleFilenameCaseSensitive,
-      // mixed-purejs avoids WASM in workerd. Obsidian still replicates MCP
-      // notes because chunks are fetched by the stored child IDs.
-      hashAlg: 'mixed-purejs',
+      hashAlg: profile.hashAlg,
     };
     this.manipulator = new DirectFileManipulator(options, { fetch });
   }
@@ -115,17 +113,19 @@ export class CommonlibFacade {
     };
     const db = this.manipulator.liveSyncLocalDB;
     try {
-      if (!expectedRevision) {
-        try {
-          const current = await db.getRaw(documentId);
-          if (current && current._rev && !isDeleted(current)) return false;
-        } catch (error) {
-          if (!isMissing(error)) throw error;
-        }
+      let baseRevision = expectedRevision;
+      if (baseRevision === undefined) {
+        const existing = await db.getDBEntryMeta(path as CommonlibPath, undefined, true);
+        if (existing && !isDeleted(existing)) return false;
+        baseRevision = existing === false ? undefined : existing._rev;
       }
-      const result = expectedRevision
-        ? await db.putDBEntryWithLiveBaseRevision(note, expectedRevision)
-        : await db.putDBEntry(note);
+      // Commonlib owns chunking and serialization. Its live-base writer uses a
+      // normal PouchDB put. No revision is create-only; a tombstone revision
+      // atomically revives the path in the same way as a host CREATE event.
+      const result = await db.putDBEntryWithLiveBaseRevision(
+        note,
+        baseRevision as string,
+      );
       if (!result || typeof result.rev !== 'string') return false;
       return { revision: result.rev };
     } catch (error) {

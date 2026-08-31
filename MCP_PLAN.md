@@ -1,200 +1,142 @@
-# Read-only Obsidian LiveSync MCP — minimal implementation plan
+# Obsidian LiveSync MCP — minimal write-capable plan
 
 ## Goal
 
-Build the smallest useful authenticated MCP server that can inspect, list, and
-read Markdown files from one existing Self-hosted LiveSync vault without
-changing that vault or disrupting normal Obsidian replication.
+Build the smallest useful authenticated MCP server that can list, read, create,
+edit, and delete Markdown files in one existing Self-hosted LiveSync vault
+without disrupting normal Obsidian replication.
 
-The first release is deliberately read-only. Writes, historical compatibility,
-and production-hardening exercises are not prerequisites for proving the core
-product works.
+Writes are included because they are essential to the first useful release.
+They remain disabled by default until the compatibility and concurrency tests
+in this plan pass. Move and rename are deliberately excluded: LiveSync has no
+atomic move primitive, and clients can explicitly create a copy and then delete
+the source when that behaviour is wanted.
 
 ## Fixed compatibility target
 
 - Self-hosted LiveSync `1.0.21`
 - Upstream tag commit `f5f7aab11f03f62c6946d2fa296c50bb5df5b2a4`
-- Its lockfile dependency: `@vrtmrz/livesync-commonlib@0.1.19`
-- This repository pins the same Commonlib version.
+- `@vrtmrz/livesync-commonlib@0.1.19`
 
-No older LiveSync release is in scope. When LiveSync is upgraded, compatibility
-with the new current version will be checked then.
+No historical LiveSync releases are in scope.
 
-## Architecture kept from the original design
+## Architecture
 
-- The deployed `cloudflare-pouchdb` Worker, `PouchDatabase` class, Durable
-  Object namespace, migrations, and CouchDB routes remain unchanged.
+- Keep the deployed `cloudflare-pouchdb` Worker, `PouchDatabase` class,
+  Durable Object namespace, migrations, and CouchDB routes unchanged.
 - A separate stateless MCP Worker calls additive semantic Durable Object RPC.
 - One MCP deployment addresses one fixed `VAULT_DATABASE`; callers never
   provide a database name.
-- Commonlib reads the authoritative PouchDB data through a fixed-database
-  in-process fetch bridge. The bridge never falls back to network `fetch`.
-- The MCP Worker owns authentication and tool formatting. The storage Worker
-  owns vault access.
+- Commonlib owns LiveSync path handling, chunking, hashing, serialization, and
+  logical file reads. A fixed-database in-process fetch bridge connects it to
+  the existing Durable Object router and never falls back to network fetch.
+- The MCP Worker owns OAuth, authorization, the write kill switch, and tool
+  formatting. The storage Worker owns vault access and revision checks.
 
-## Scope of the first release
+## V1 surface
 
-Supported:
-
-- unencrypted, unobfuscated LiveSync vaults;
-- Markdown files;
-- compatibility/status inspection;
-- bounded file listing;
-- complete file reads;
-- GitHub-authenticated, deny-by-default allowlisted MCP access.
-
-Not supported:
-
-- create, update, delete, move, rename, patch, or bulk mutation;
-- encryption or path obfuscation;
-- historical LiveSync versions;
-- search or indexing;
-- snapshot pagination guarantees;
-- line-range reads;
-- automatic chunk garbage collection;
-- certification across multiple MCP clients.
-
-## Checkpoint 0 — Reproducible workspace
-
-Already complete at commit `3e2efce` (`chore: establish reproducible
-workspace`). It provides one lockfile, npm workspaces, registry-backed
-dependencies, generated Worker types, dependency provenance checks, tests, and
-dry-run commands.
-
-## Checkpoint 1 — Current LiveSync read compatibility
-
-Implement only what is required to prove logical reads:
-
-1. Keep the fixed-database `InProcessCouchFetch` bridge and its focused security
-   tests: fixed dummy origin, captured database identity, overwritten database
-   header, removed authorization, rejected redirects, and no network fallback.
-2. Generate one small synthetic fixture using the official Self-hosted LiveSync
-   `1.0.21` CLI and Commonlib `0.1.19`.
-3. Include representative Markdown content in that fixture: frontmatter,
-   Unicode path/content, CRLF, and one chunked note.
-4. Import the fixture into workerd and read those files byte-for-byte through
-   Commonlib and the in-process bridge.
-5. Detect encryption and path obfuscation from remote metadata and report them
-   as unsupported. Small metadata unit tests are sufficient; do not generate a
-   fixture matrix.
-6. Keep every Commonlib integration method private. Add no write method or
-   write RPC.
-
-Exit criteria:
-
-- the `1.0.21` fixture reads byte-for-byte through the real bridge;
-- the bridge cannot escape its Durable Object or database identity;
-- encrypted and obfuscated profiles fail closed;
-- existing CouchDB tests and Worker dry-run remain green.
-
-One focused Terra review checks only these criteria. Findings about writes,
-historical versions, exhaustive failure injection, or future production
-hardening do not expand this checkpoint.
-
-Checkpoint commit:
-
-```text
-feat: add current livesync read compatibility
-```
-
-## Checkpoint 2 — Minimal read-only vault RPC
-
-Add a small internal contracts workspace and three semantic methods:
-
-```ts
-vaultStatus()
-listVaultFiles({ prefix?, limit?, cursor? })
-readVaultFile({ path })
-```
-
-Requirements:
-
-- contracts use runtime schemas and structured-clone-compatible values;
-- vault identity is derived internally and never accepted by RPC;
-- paths are relative Markdown paths without traversal or internal document IDs;
-- listing is deterministic, bounded, and best-effort under concurrent edits;
-- cursors are opaque but need not provide snapshot isolation;
-- reads preserve Unicode and newline bytes;
-- conservative limits stay below known Worker/RPC/storage constraints;
-- errors cover only the cases actually used: invalid input, not found,
-  unsupported configuration, too large, temporarily unavailable, and internal;
-- existing CouchDB routes and legacy RPC remain unchanged.
-
-No `writeVaultFile`, write contracts, revision CAS, line ranges, or complex
-pagination model are included.
-
-After tests and one focused Terra review, commit:
-
-```text
-feat: add read-only vault rpc
-```
-
-## Checkpoint 3 — Minimal authenticated MCP Worker
-
-Build `apps/cloudflare-obsidian-mcp` with stateless Streamable HTTP MCP and
-register:
+Supported tools:
 
 - `vault_status`
 - `list_files`
 - `read_file`
+- `create_file`
+- `edit_file`
+- `delete_file`
 
-Requirements:
+Not supported:
 
-- fixed cross-Worker `POUCH_DATABASES` binding and `VAULT_DATABASE` setting;
-- Cloudflare OAuth provider with GitHub login;
-- deny-by-default GitHub allowlist;
-- one `vault:read` scope checked at tool execution;
-- standard provider support for PKCE, metadata, and client registration;
-- bounded schemas and concise structured tool results;
-- fake-RPC tool tests plus one local two-Worker status/list/read test;
-- malicious tool input cannot select another database.
+- move, rename, patch, or bulk mutations;
+- encryption or path obfuscation;
+- non-Markdown and binary notes;
+- search, indexing, or automatic chunk garbage collection;
+- historical LiveSync versions.
 
-Do not add write scopes, a write switch, custom token machinery, or exhaustive
-OAuth permutations.
+## Completed checkpoints
 
-After tests and one focused Terra review, commit:
+- `3e2efce` — reproducible npm workspace.
+- `cec27f9` — current LiveSync 1.0.21 read compatibility.
+- `d3bccda` — semantic read RPC.
+- `3780b4c` — authenticated read MCP Worker.
+
+Later commits started write support and review fixes. They are being completed
+in the write checkpoint below rather than removed or hidden.
+
+## Current checkpoint — safe minimal writes and review closure
+
+### Storage and Commonlib
+
+1. Route Commonlib through the Worker-compatible `xxhash-wasm` loader and use
+   LiveSync's `xxhash64` algorithm. Do not replace LiveSync hashing or
+   serialization locally.
+2. Add the smallest version-pinned Commonlib compatibility patch needed for a
+   create-only write: omit `_rev`, write through normal PouchDB `put`, and map a
+   concurrent `409` to `conflict`.
+3. Keep edits revision-checked with `putDBEntryWithLiveBaseRevision`.
+4. Keep deletes as a tombstone written with the exact expected revision.
+5. Write chunks before metadata. A losing create may leave unreferenced chunks;
+   do not delete them inline.
+6. Close Commonlib after each RPC and abort any outstanding `_changes`
+   long-poll when the operation ends.
+
+### MCP and authorization
+
+1. Remove `move_file` from contracts, RPC, tools, tests, and documentation.
+2. Add `MCP_WRITES_ENABLED`, default `false`.
+3. When writes are disabled, do not advertise write tools or the write OAuth
+   scope, and reject every write handler independently.
+4. When enabled, writes require an allowlisted GitHub login and both
+   `vault:read` and `vault:write`.
+5. Token exchange may only narrow granted scopes; it must never invent a scope
+   for an empty or unknown requested scope.
+6. Continue resolving only the configured `VAULT_DATABASE`.
+
+### Required tests
+
+- exact current-client fixture reads through workerd;
+- workerd writes produce current LiveSync `xxhash64` chunk IDs and round-trip;
+- two concurrent creates: exactly one winner and no conflict branch;
+- two edits from one revision: exactly one winner;
+- delete/update race: exactly one winner;
+- stale edits and deletes return `conflict`;
+- writes are absent and denied when the kill switch is off;
+- write authorization requires both scopes and the runtime allowlist;
+- one local MCP-to-storage integration covers status, list, read, create, edit,
+  and delete through the real Durable Object RPC boundary;
+- existing CouchDB replication tests remain green.
+
+### Gate
+
+Run dependency checks, typechecks, all tests, both Worker dry-runs, and
+`git diff --check`. Submit the complete diff and results to independent Terra
+reviews for Commonlib/storage and MCP/auth. Fix findings before committing.
+
+Checkpoint commit:
 
 ```text
-feat: add read-only obsidian mcp worker
+feat: complete guarded livesync writes
 ```
 
-## Checkpoint 4 — Small staging proof
-
-Using one disposable vault on the current Self-hosted LiveSync version:
+## Next checkpoint — disposable-vault staging
 
 1. Deploy the additive storage RPC.
 2. Confirm existing Obsidian replication still works.
-3. Deploy the read-only MCP Worker.
-4. Connect one intended MCP client.
-5. Verify status, listing, Unicode/frontmatter/newline content, and a chunked
-   read.
-6. Record minimal deployment, secret, revocation, and MCP-only rollback steps
-   without committing identifiers or secrets.
+3. Deploy MCP with `MCP_WRITES_ENABLED=false` and verify status/list/read.
+4. Enable writes for the allowlisted test account.
+5. Create, edit, and delete designated test notes and confirm propagation to
+   two current LiveSync 1.0.21 clients.
+6. Exercise stale revisions, the write kill switch, token revocation, and
+   MCP-only rollback.
+7. Record sanitized evidence and runbooks without committing identifiers,
+   vault content, OAuth credentials, or secrets.
 
-This checkpoint requires external deployment credentials and an interactive
-client, so repository implementation stops and asks for those inputs when
-needed.
+This checkpoint pauses for deployment credentials and interactive client
+access. It receives a separate Terra review and commit.
 
-After staging evidence and one focused Terra review, commit:
+## Commit discipline
 
-```text
-test: validate read-only mcp staging
-```
-
-## Review and commit discipline
-
-- Each checkpoint starts from the previous checkpoint commit.
-- One implementation agent may be used for a clearly bounded package or test.
-- One independent Terra review checks only the stated exit criteria.
-- Review does not expand the checkpoint with deferred features.
-- Fix in-scope findings, run the checkpoint suite, check `git diff --check`, and
-  commit only checkpoint-related files.
-- Do not amend, squash, rebase, or mix unrelated changes into checkpoint
-  commits.
-
-## Deferred decisions
-
-Writes will be reconsidered only after the read-only MCP is useful in practice.
-That separate design must address create-only CAS, guarded updates, conflicts,
-partial failures, orphan chunks, recovery, and a write kill switch. None of
-those concerns block this read-only release.
+- Review and test each checkpoint before its atomic commit.
+- Do not amend, squash, rebase, or rewrite approved checkpoint commits.
+- Do not mix unrelated user changes into a checkpoint.
+- Production identifiers and secrets are supplied out of band and never
+  committed.

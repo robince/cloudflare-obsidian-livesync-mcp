@@ -10,6 +10,7 @@ export const VAULT_LIMITS = {
   maxWriteBytes: 512_000,
   maxPathLength: 1024,
   maxCursorLength: 2048,
+  maxRevisionLength: 256,
 } as const;
 
 export const vaultErrorCodeSchema = z.enum([
@@ -85,33 +86,19 @@ export type WriteVaultFileData = z.infer<typeof writeVaultFileDataSchema>;
 
 export const createVaultFileRequestSchema = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: z.string(),
+  content: z.string().max(VAULT_LIMITS.maxWriteBytes),
 }).strict();
 export type CreateVaultFileRequest = z.infer<typeof createVaultFileRequestSchema>;
 
 export const updateVaultFileRequestSchema = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: z.string(),
-  expectedRevision: z.string().min(1),
+  content: z.string().max(VAULT_LIMITS.maxWriteBytes),
+  expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
 }).strict();
 export type UpdateVaultFileRequest = z.infer<typeof updateVaultFileRequestSchema>;
 
 export const deleteVaultFileRequestSchema = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  expectedRevision: z.string().min(1),
+  expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
 }).strict();
 export type DeleteVaultFileRequest = z.infer<typeof deleteVaultFileRequestSchema>;
-
-export const moveVaultFileRequestSchema = z.object({
-  from: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  to: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  expectedRevision: z.string().min(1),
-}).strict();
-export type MoveVaultFileRequest = z.infer<typeof moveVaultFileRequestSchema>;
-
-export const moveVaultFileDataSchema = z.object({
-  from: z.string(),
-  to: z.string(),
-  revision: z.string(),
-});
-export type MoveVaultFileData = z.infer<typeof moveVaultFileDataSchema>;

@@ -31,11 +31,20 @@ type GithubSecrets = {
   GITHUB_CLIENT_SECRET?: string;
 };
 
+class ConfigurationError extends Error {}
+
+function writesEnabled(env: Env): boolean {
+  return (env.MCP_WRITES_ENABLED as string) === 'true';
+}
+
 class McpApi extends WorkerEntrypoint<Env, McpAuthProps> {
   fetch(request: Request): Promise<Response> {
     const origin = publicOrigin(this.env);
     return createMcpHandler(
-      () => createVaultMcpServer(vaultRpcForEnv(this.env), { allowedLogins: allowlistFromEnv(this.env) }),
+      () => createVaultMcpServer(vaultRpcForEnv(this.env), {
+        allowedLogins: allowlistFromEnv(this.env),
+        writesEnabled: writesEnabled(this.env),
+      }),
       {
         route: '/mcp',
         allowedHostnames: [origin.hostname],
@@ -50,6 +59,7 @@ class McpApi extends WorkerEntrypoint<Env, McpAuthProps> {
 function providerFor(env: Env): OAuthProvider<Env> {
   const origin = publicOrigin(env);
   const resource = new URL('/mcp', origin).toString();
+  const supportedScopes = writesEnabled(env) ? [READ_SCOPE, WRITE_SCOPE] : [READ_SCOPE];
   return new OAuthProvider<Env>({
     apiRoute: '/mcp',
     apiHandler: McpApi,
@@ -60,17 +70,18 @@ function providerFor(env: Env): OAuthProvider<Env> {
     tokenEndpoint: '/oauth/token',
     clientRegistrationEndpoint: '/oauth/register',
     clientIdMetadataDocumentEnabled: true,
-    scopesSupported: [READ_SCOPE, WRITE_SCOPE],
+    scopesSupported: supportedScopes,
     tokenExchangeCallback: ({ props, requestedScope }) => ({
       accessTokenProps: {
         ...props,
-        scopes: accessTokenScopes(props, requestedScope),
+        scopes: accessTokenScopes(props, requestedScope)
+          .filter((scope) => supportedScopes.includes(scope)),
       },
     }),
     resourceMetadata: {
       resource,
       authorization_servers: [origin.origin],
-      scopes_supported: [READ_SCOPE, WRITE_SCOPE],
+      scopes_supported: supportedScopes,
       resource_name: 'Obsidian LiveSync vault',
     },
   });
@@ -102,8 +113,11 @@ async function startAuthorization(request: Request, env: OAuthEnv): Promise<Resp
 
   const client = await env.OAUTH_PROVIDER.lookupClient(authorization.clientId);
   if (!client) return new Response('Unknown OAuth client.', { status: 400 });
-  if (!authorization.scope.includes(READ_SCOPE) && !authorization.scope.includes(WRITE_SCOPE)) {
-    return new Response('The vault:read or vault:write scope is required.', { status: 400 });
+  if (!authorization.scope.includes(READ_SCOPE)) {
+    return new Response('The vault:read scope is required.', { status: 400 });
+  }
+  if (!writesEnabled(env) && authorization.scope.includes(WRITE_SCOPE)) {
+    return new Response('Vault writes are disabled.', { status: 400 });
   }
 
   const id = randomToken();
@@ -169,9 +183,9 @@ async function completeGithubAuthorization(request: Request, env: OAuthEnv): Pro
     if (!allowedGithubLogins(env.GITHUB_ALLOWED_LOGINS).has(login)) {
       return new Response('This GitHub account is not allowed.', { status: 403, headers: { 'set-cookie': clearCsrfCookie() } });
     }
-    const scopes = grantedScopes({ scopes: state.request.scope });
-    if (scopes.length === 0) {
-      return new Response('The vault:read or vault:write scope is required.', { status: 400 });
+    const scopes = grantedScopes({ scopes: state.request.scope }, writesEnabled(env));
+    if (!scopes.includes(READ_SCOPE)) {
+      return new Response('The vault:read scope is required.', { status: 400 });
     }
     const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
       request: state.request,
@@ -238,9 +252,9 @@ function authorizationFailure(error: unknown): Response {
   return Response.redirect(redirect.toString(), 302);
 }
 
-function grantedScopes(props: { scopes?: unknown } | undefined): string[] {
+function grantedScopes(props: { scopes?: unknown } | undefined, allowWrite: boolean): string[] {
   const requested = Array.isArray(props?.scopes) ? props.scopes : [];
-  return [...new Set(requested.filter((scope) => scope === READ_SCOPE || scope === WRITE_SCOPE))];
+  return [...new Set(requested.filter((scope) => scope === READ_SCOPE || (allowWrite && scope === WRITE_SCOPE)))];
 }
 
 function publicOrigin(env: Env): URL {
@@ -248,10 +262,10 @@ function publicOrigin(env: Env): URL {
   try {
     url = new URL(env.MCP_PUBLIC_BASE_URL);
   } catch {
-    throw new Error('MCP_PUBLIC_BASE_URL must be an HTTPS origin without a path.');
+    throw new ConfigurationError('MCP_PUBLIC_BASE_URL must be an HTTPS origin without a path.');
   }
-  if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('MCP_PUBLIC_BASE_URL must be an HTTPS origin without a path.');
+  if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+    throw new ConfigurationError('MCP_PUBLIC_BASE_URL must be an HTTPS origin without a path.');
   }
   return url;
 }
@@ -324,7 +338,7 @@ function githubSecrets(env: Env): GithubSecrets {
 
 function consentPage(authorizationId: string, csrf: string, clientName: string, scopes: string[]): string {
   const access = scopes.includes(WRITE_SCOPE)
-    ? 'list, read, and edit Markdown files'
+    ? 'list, read, create, edit, and delete Markdown files'
     : 'list and read Markdown files';
   return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>${escapeHtml(clientName)} requests access to ${access} in your configured vault.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
 }
@@ -353,11 +367,7 @@ export default {
       }
       return providerFor(env).fetch(request, env, ctx);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      if (
-        message.includes('MCP_PUBLIC_BASE_URL')
-        || (error instanceof TypeError && message.includes('Invalid URL'))
-      ) {
+      if (error instanceof ConfigurationError) {
         return Promise.resolve(new Response('MCP_PUBLIC_BASE_URL is invalid.', { status: 500 }));
       }
       throw error;

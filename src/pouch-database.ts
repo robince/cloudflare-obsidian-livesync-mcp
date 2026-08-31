@@ -6,8 +6,6 @@ import type {
   DeleteVaultFileRequest,
   ListVaultFilesRequest,
   ListVaultFilesData,
-  MoveVaultFileData,
-  MoveVaultFileRequest,
   ReadVaultFileRequest,
   ReadVaultFileData,
   UpdateVaultFileRequest,
@@ -62,6 +60,7 @@ export class PouchDatabase extends DurableObject<Env> {
   private commonlibRefs = 0;
   private commonlibCreate?: Promise<CommonlibFacade>;
   private commonlibIdleWaiters: Array<() => void> = [];
+  private activeChangeLongpolls = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -164,10 +163,6 @@ export class PouchDatabase extends DurableObject<Env> {
 
   async deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
     return this.vault().delete(request);
-  }
-
-  async moveVaultFile(request: MoveVaultFileRequest): Promise<VaultResult<MoveVaultFileData>> {
-    return this.vault().move(request);
   }
 
   private requireExists(): void {
@@ -452,7 +447,12 @@ export class PouchDatabase extends DurableObject<Env> {
     let result = await query();
     if (url.searchParams.get('feed') === 'longpoll' && result.results.length === 0) {
       const timeout = Math.min(numberParam(url, 'timeout') ?? 25_000, 55_000);
-      await waitForChange(db, since, timeout);
+      this.activeChangeLongpolls += 1;
+      try {
+        await waitForChange(db, since, timeout, request.signal);
+      } finally {
+        this.activeChangeLongpolls -= 1;
+      }
       result = await query();
     }
     if (url.searchParams.get('feed') === 'continuous') {
@@ -635,22 +635,29 @@ function isMissingDocument(error: unknown): boolean {
   return !!error && typeof error === 'object' && 'status' in error && error.status === 404;
 }
 
-async function waitForChange(db: AnyDatabase, since: string | number, timeoutMs: number): Promise<void> {
+async function waitForChange(
+  db: AnyDatabase,
+  since: string | number,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const feed = db.changes({ since, live: true, return_docs: false });
-    const timer = setTimeout(() => {
-      feed.cancel();
-      resolve();
-    }, timeoutMs);
-    feed.once('change', () => {
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
       feed.cancel();
-      resolve();
-    });
-    feed.once('error', (error: unknown) => {
-      clearTimeout(timer);
-      reject(error);
-    });
+      error === undefined ? resolve() : reject(error);
+    };
+    const abort = () => finish(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    const timer = setTimeout(() => finish(), timeoutMs);
+    feed.once('change', () => finish());
+    feed.once('error', (error: unknown) => finish(error));
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
   });
 }
 

@@ -99,7 +99,7 @@ describe('read profile checks', () => {
     tweak_values: { PREFERRED: preferred },
   });
 
-  it('accepts the supported read profile without requiring the producer hash algorithm', () => {
+  it('accepts the supported current-client profile', () => {
     expect(inspectVaultProfile(milestone({
       encrypt: false,
       usePathObfuscation: false,
@@ -110,8 +110,9 @@ describe('read profile checks', () => {
   });
 
   it.each<[Record<string, unknown>, string]>([
-    [{ encrypt: true, usePathObfuscation: false }, 'encryption_unsupported'],
-    [{ encrypt: false, usePathObfuscation: true }, 'path_obfuscation_unsupported'],
+    [{ encrypt: true, usePathObfuscation: false, hashAlg: 'xxhash64' }, 'encryption_unsupported'],
+    [{ encrypt: false, usePathObfuscation: true, hashAlg: 'xxhash64' }, 'path_obfuscation_unsupported'],
+    [{ encrypt: false, usePathObfuscation: false, hashAlg: 'mixed-purejs' }, 'hash_algorithm_unsupported'],
   ])('rejects unsupported content addressing', (preferred, reason) => {
     expect(inspectVaultProfile(milestone(preferred), undefined)).toMatchObject({
       supported: false,
