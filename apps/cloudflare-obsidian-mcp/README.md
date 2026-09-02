@@ -49,6 +49,9 @@ npm run dry-run --workspace @cloudflare-obsidian-livesync/mcp
 ```
 
 Tool registration, output schemas, and allowlist checks are covered by the MCP
-workspace tests. Vault status/list/read go through the storage Durable Object in
-the root workerd suite. Interactive OAuth against a disposable vault is the
-staging checkpoint.
+workspace tests. The workerd suite runs the MCP Worker and a Wrangler-built
+storage Worker together: after a real DCR, PKCE, consent, callback, and token
+exchange flow, authenticated `vault_status`, `list_files`, and `read_file`
+requests cross the configured external Durable Object binding. It also covers
+callback replay protection, CSRF rejection, and allowlist denial. Interactive
+OAuth with GitHub and a disposable vault remains a staging checkpoint.

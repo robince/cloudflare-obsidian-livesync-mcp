@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   CONTRACT_VERSION,
   VAULT_LIMITS,
+  vaultContentSchema,
   type VaultResult,
 } from '@cloudflare-obsidian-livesync/contracts';
 
@@ -47,12 +48,12 @@ export const readFileInput = z.object({
 
 export const createFileInput = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: z.string().max(VAULT_LIMITS.maxWriteBytes),
+  content: vaultContentSchema,
 }).strict();
 
 export const editFileInput = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: z.string().max(VAULT_LIMITS.maxWriteBytes),
+  content: vaultContentSchema,
   expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
 }).strict();
 

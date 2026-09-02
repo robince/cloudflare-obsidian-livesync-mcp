@@ -56,11 +56,11 @@ not part of an MCP write.
 
 ## Profile changes during one call take effect on the next call
 
-The Commonlib facade is keyed by the exact profile fingerprint and closed after
-the last in-flight RPC. If compression or filename-case settings change during
-an operation, that operation finishes with its acquired facade; the next RPC
-uses the new profile. Replacing a decoder underneath an active operation would
-be less safe.
+Each RPC inspects one profile, creates a Commonlib facade from those exact
+settings, and closes that same facade in `finally`. If compression or
+filename-case settings change during an operation, that operation finishes
+with its acquired profile; the next RPC inspects and uses the new profile.
+Replacing a decoder underneath an active operation would be less safe.
 
 ## Deployment identifiers remain out of the repository
 

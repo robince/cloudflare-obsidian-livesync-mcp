@@ -1,9 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 
 import fixture from './fixtures/livesync-1.0.21.json';
-import type { PouchDatabase } from '../src/pouch-database';
 import { createInProcessCouchFetch, IN_PROCESS_COUCH_ORIGIN } from '../src/livesync-vault/in-process-couch-fetch';
 import { inspectVaultProfile, MILESTONE_DOCUMENT_ID } from '../src/livesync-vault/profile';
 import type { JsonObject } from '../src/types';
@@ -83,12 +81,6 @@ describe('Self-hosted LiveSync 1.0.21 compatibility in workerd', () => {
         data: { path, content },
       });
     }
-
-    const leftover = await runInDurableObject(stub, (instance: PouchDatabase) => ({
-      facade: instance['commonlibFacade'],
-      refs: instance['commonlibRefs'],
-    }));
-    expect(leftover).toEqual({ facade: undefined, refs: 0 });
   });
 });
 

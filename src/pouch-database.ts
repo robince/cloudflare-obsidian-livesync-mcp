@@ -55,11 +55,6 @@ interface FindRequest {
 export class PouchDatabase extends DurableObject<Env> {
   private db?: AnyDatabase;
   private dbName?: string;
-  private commonlibFacade?: CommonlibFacade;
-  private commonlibFingerprint?: string;
-  private commonlibRefs = 0;
-  private commonlibCreate?: Promise<CommonlibFacade>;
-  private commonlibIdleWaiters: Array<() => void> = [];
   private activeChangeLongpolls = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -177,72 +172,9 @@ export class PouchDatabase extends DurableObject<Env> {
         this.requireExists();
         return this.inspectCommonlibProfile();
       },
-      acquireCommonlib: () => this.acquireCommonlib(),
-      releaseCommonlib: () => this.releaseCommonlib(),
+      acquireCommonlib: (profile) => this.createCommonlib(profile),
+      releaseCommonlib: (commonlib) => commonlib.close(),
     });
-  }
-
-  private async acquireCommonlib(): Promise<CommonlibFacade> {
-    this.requireExists();
-    let profile = await this.inspectCommonlibProfile();
-    if (!profile.supported) {
-      throw new Error(`unsupported LiveSync profile (${profile.reasons.join(', ')})`);
-    }
-    while (this.commonlibFacade && this.commonlibFingerprint !== profile.fingerprint) {
-      if (this.commonlibRefs === 0) {
-        await this.disposeCommonlib();
-        break;
-      }
-      await this.waitForCommonlibIdle();
-      profile = await this.inspectCommonlibProfile();
-      if (!profile.supported) {
-        throw new Error(`unsupported LiveSync profile (${profile.reasons.join(', ')})`);
-      }
-    }
-    if (!this.commonlibFacade) {
-      const creating = this.commonlibCreate ?? this.createCommonlib(profile);
-      this.commonlibCreate = creating;
-      try {
-        const facade = await creating;
-        if (!this.commonlibFacade) {
-          this.commonlibFacade = facade;
-          this.commonlibFingerprint = profile.fingerprint;
-        } else if (facade !== this.commonlibFacade) {
-          await facade.close().catch(() => undefined);
-        }
-      } catch (error) {
-        if (this.commonlibCreate === creating) this.commonlibCreate = undefined;
-        throw error;
-      }
-      if (this.commonlibCreate === creating) this.commonlibCreate = undefined;
-    }
-    this.commonlibRefs += 1;
-    return this.commonlibFacade;
-  }
-
-  private async releaseCommonlib(): Promise<void> {
-    if (this.commonlibRefs > 0) this.commonlibRefs -= 1;
-    if (this.commonlibRefs === 0) await this.disposeCommonlib();
-  }
-
-  private waitForCommonlibIdle(): Promise<void> {
-    return new Promise((resolve) => this.commonlibIdleWaiters.push(resolve));
-  }
-
-  private notifyCommonlibIdle(): void {
-    const waiters = this.commonlibIdleWaiters;
-    this.commonlibIdleWaiters = [];
-    for (const waiter of waiters) waiter();
-  }
-
-  private async disposeCommonlib(): Promise<void> {
-    const facade = this.commonlibFacade;
-    this.commonlibFacade = undefined;
-    this.commonlibFingerprint = undefined;
-    this.commonlibRefs = 0;
-    this.commonlibCreate = undefined;
-    if (facade) await facade.close().catch(() => undefined);
-    this.notifyCommonlibIdle();
   }
 
   private async createCommonlib(profile: VaultProfileInspection): Promise<CommonlibFacade> {

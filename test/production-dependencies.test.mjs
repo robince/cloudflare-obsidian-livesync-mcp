@@ -106,4 +106,31 @@ describe('production dependency provenance', () => {
     };
     assert.notDeepEqual(validateProductionDependencies({ manifest, lockfile, registry }), []);
   });
+
+  it('validates required peer dependencies and rejects poisoned provenance', () => {
+    const lockfile = lockWith({
+      ...registryEntry,
+      peerDependencies: { poisoned: '^1.0.0' },
+    });
+    lockfile.packages['node_modules/poisoned'] = {
+      ...registryEntry,
+      resolved: 'git+https://github.com/example/poisoned.git',
+    };
+    const problems = validateProductionDependencies({ manifest, lockfile, registry });
+    assert.ok(problems.includes(
+      'node_modules/poisoned: resolves outside the configured npm registry: git+https://github.com/example/poisoned.git'
+    ));
+  });
+
+  it('allows a missing peer explicitly marked optional', () => {
+    assert.deepEqual(validateProductionDependencies({
+      manifest,
+      lockfile: lockWith({
+        ...registryEntry,
+        peerDependencies: { optionalPeer: '^1.0.0' },
+        peerDependenciesMeta: { optionalPeer: { optional: true } },
+      }),
+      registry,
+    }), []);
+  });
 });

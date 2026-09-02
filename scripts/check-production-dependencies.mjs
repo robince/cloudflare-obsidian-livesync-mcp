@@ -61,6 +61,11 @@ function productionEdges(entry) {
   for (const [name, specifier] of Object.entries(entry.optionalDependencies ?? {})) {
     edges.set(name, { specifier, optional: true });
   }
+  for (const [name, specifier] of Object.entries(entry.peerDependencies ?? {})) {
+    if (edges.has(name)) continue;
+    const optional = entry.peerDependenciesMeta?.[name]?.optional === true;
+    edges.set(name, { specifier, optional });
+  }
   return edges;
 }
 

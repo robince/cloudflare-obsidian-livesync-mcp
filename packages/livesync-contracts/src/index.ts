@@ -84,15 +84,23 @@ export const writeVaultFileDataSchema = z.object({
 });
 export type WriteVaultFileData = z.infer<typeof writeVaultFileDataSchema>;
 
+/** Markdown content bounded by its encoded wire/storage size, not UTF-16 code units. */
+export const vaultContentSchema = z.string()
+  .max(VAULT_LIMITS.maxWriteBytes)
+  .refine(
+    (content) => new TextEncoder().encode(content).byteLength <= VAULT_LIMITS.maxWriteBytes,
+    { message: `Content must not exceed ${VAULT_LIMITS.maxWriteBytes} UTF-8 bytes.` },
+  );
+
 export const createVaultFileRequestSchema = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: z.string().max(VAULT_LIMITS.maxWriteBytes),
+  content: vaultContentSchema,
 }).strict();
 export type CreateVaultFileRequest = z.infer<typeof createVaultFileRequestSchema>;
 
 export const updateVaultFileRequestSchema = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: z.string().max(VAULT_LIMITS.maxWriteBytes),
+  content: vaultContentSchema,
   expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
 }).strict();
 export type UpdateVaultFileRequest = z.infer<typeof updateVaultFileRequestSchema>;

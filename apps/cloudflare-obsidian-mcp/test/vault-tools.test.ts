@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { allowedGithubLogins, normalizeGithubLogin } from '../src/auth-utils';
 import {
   accessTokenScopes,
   createVaultMcpServer,
   createVaultToolHandlers,
+  createFileInput,
   hasReadScope,
   hasVaultAccess,
   listFilesInput,
@@ -12,7 +13,7 @@ import {
   WRITE_SCOPE,
   VAULT_TOOL_NAMES,
 } from '../src/vault-tools';
-import { isVaultDatabaseName, VAULT_DATABASE_NAME } from '../src/vault-rpc';
+import { isVaultDatabaseName, VAULT_DATABASE_NAME, vaultRpcForEnv } from '../src/vault-rpc';
 import type { VaultRpc } from '../src/vault-rpc';
 
 const fakeRpc: VaultRpc = {
@@ -56,6 +57,13 @@ describe('MCP vault surface', () => {
   it('does not accept a database selector in tool input', () => {
     expect(listFilesInput.safeParse({ database: 'another-vault' }).success).toBe(false);
     expect(readFileInput.safeParse({ path: 'notes/a.md', database: 'another-vault' }).success).toBe(false);
+  });
+
+  it('enforces write limits in UTF-8 bytes', () => {
+    expect(createFileInput.safeParse({
+      path: 'notes/large.md',
+      content: 'é'.repeat(256_001),
+    }).success).toBe(false);
   });
 
   it('requires vault:read regardless of other props', () => {
@@ -136,6 +144,16 @@ describe('MCP vault surface', () => {
     expect(VAULT_DATABASE_NAME.test('')).toBe(false);
     expect(isVaultDatabaseName(undefined)).toBe(false);
     expect(isVaultDatabaseName('undefined')).toBe(true);
+  });
+
+  it('fails closed before selecting a Durable Object for an invalid VAULT_DATABASE', async () => {
+    const getByName = vi.fn();
+    const rpc = vaultRpcForEnv({ VAULT_DATABASE: 'bad/name', POUCH_DATABASES: { getByName } });
+    await expect(rpc.vaultStatus()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unavailable' },
+    });
+    expect(getByName).not.toHaveBeenCalled();
   });
 });
 

@@ -75,14 +75,54 @@ describe('vault RPC', () => {
       ok: false,
       error: { code: 'invalid_input' },
     });
-    await expect(stub.readVaultFile({ path: 'h:internal.md' })).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'invalid_input' },
-    });
+    for (const reserved of ['h:internal.md', 'i:internal.md', 'ix:internal.md', 'ps:internal.md', 'notes/a:b.md']) {
+      await expect(stub.readVaultFile({ path: reserved })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input' },
+      });
+    }
     await expect(stub.readVaultFile({ path: 'notes/missing.md' })).resolves.toMatchObject({
       ok: false,
       error: { code: 'not_found' },
     });
+  });
+
+  it.each([undefined, 1])('bounds chunk loading when metadata size is %s', async (declaredSize) => {
+    const { name, stub } = await seededVault('bounded-read');
+    const path = 'notes/oversized.md';
+    const chunkIds = ['h:bounded-1', 'h:bounded-2', 'h:bounded-3', 'h:bounded-4'];
+    for (const id of chunkIds) {
+      await stub.putDocument(name, { _id: id, type: 'leaf', data: 'x'.repeat(180_000) });
+    }
+    await stub.putDocument(name, {
+      _id: path,
+      path,
+      type: 'plain',
+      children: chunkIds,
+      ctime: 1,
+      mtime: 1,
+      ...(declaredSize === undefined ? {} : { size: declaredSize }),
+      eden: {},
+    });
+
+    const observed = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const originalFetch = instance.fetch.bind(instance);
+      const requestedChunks: string[] = [];
+      instance.fetch = async (request: Request) => {
+        const pathname = decodeURIComponent(new URL(request.url).pathname).slice(1);
+        if (request.method === 'GET' && pathname.startsWith('h:bounded-')) requestedChunks.push(pathname);
+        return originalFetch(request);
+      };
+      try {
+        const result = await instance.readVaultFile({ path });
+        return { result, requestedChunks };
+      } finally {
+        instance.fetch = originalFetch;
+      }
+    });
+
+    expect(observed.result).toMatchObject({ ok: false, error: { code: 'too_large' } });
+    expect(observed.requestedChunks).toEqual(chunkIds.slice(0, 3));
   });
 
   it('fails closed for an unsupported profile', async () => {
@@ -102,11 +142,7 @@ describe('vault RPC', () => {
     const { stub } = await seededVault('session-teardown');
     await stub.readVaultFile({ path: 'notes/frontmatter.md' });
     const lifecycle = await runInDurableObject(stub, async (instance: PouchDatabase) => {
-      const before = {
-        facade: instance['commonlibFacade'],
-        refs: instance['commonlibRefs'],
-        longpolls: instance['activeChangeLongpolls'],
-      };
+      const longpollsBefore = instance['activeChangeLongpolls'];
       const controller = new AbortController();
       const pending = instance.fetch(new Request(
         'https://livesync.invalid/_changes?feed=longpoll&since=now&timeout=55000',
@@ -125,26 +161,32 @@ describe('vault RPC', () => {
         new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
       ]);
       return {
-        before,
+        longpollsBefore,
         activeBeforeAbort,
         settledPromptly,
         activeAfterAbort: instance['activeChangeLongpolls'],
       };
     });
     expect(lifecycle).toEqual({
-      before: { facade: undefined, refs: 0, longpolls: 0 },
+      longpollsBefore: 0,
       activeBeforeAbort: 1,
       settledPromptly: true,
       activeAfterAbort: 0,
     });
   });
 
-  it('retries Commonlib construction after a rejected create', async () => {
+  it('retries Commonlib construction after a transient failure', async () => {
     const { stub } = await seededVault('sticky-create');
     await runInDurableObject(stub, (instance: PouchDatabase) => {
-      const failed = Promise.reject(Object.assign(new Error('transient'), { status: 503 }));
-      void failed.catch(() => undefined);
-      instance['commonlibCreate'] = failed;
+      const create = instance['createCommonlib'].bind(instance);
+      let failOnce = true;
+      instance['createCommonlib'] = async (profile) => {
+        if (failOnce) {
+          failOnce = false;
+          throw Object.assign(new Error('transient'), { status: 503 });
+        }
+        return create(profile);
+      };
     });
     await expect(stub.listVaultFiles({})).resolves.toMatchObject({
       ok: false,
@@ -207,6 +249,28 @@ describe('vault RPC', () => {
     await expect(stub.readVaultFile({ path: 'notes/binary.md' })).resolves.toMatchObject({
       ok: false,
       error: { code: 'unsupported' },
+    });
+    const binary = await stub.getDocument(name, 'notes/binary.md') as unknown as { _rev: string };
+    await expect(stub.deleteVaultFile({
+      path: 'notes/binary.md',
+      expectedRevision: String(binary._rev),
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unsupported' },
+    });
+    await expect(stub.getDocument(name, 'notes/binary.md')).resolves.not.toHaveProperty('deleted', true);
+
+    const caseEntry = await stub.getDocument(name, 'notes/casetest.md') as unknown as { _rev: string };
+    await expect(stub.updateVaultFile({
+      path: 'notes/casetest.md',
+      content: 'preserve canonical case\n',
+      expectedRevision: String(caseEntry._rev),
+    })).resolves.toMatchObject({
+      ok: true,
+      data: { path: 'Notes/CaseTest.md' },
+    });
+    await expect(stub.getDocument(name, 'notes/casetest.md')).resolves.toMatchObject({
+      path: 'Notes/CaseTest.md',
     });
     await expect(stub.readVaultFile({ path: '_design/foo.md' })).resolves.toMatchObject({
       ok: false,

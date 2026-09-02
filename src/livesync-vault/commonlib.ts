@@ -8,11 +8,25 @@ import type { VaultProfileInspection } from './profile';
 
 export const COMMONLIB_VERSION = '0.1.19';
 
-type LoadedEntry = Exclude<Awaited<ReturnType<DirectFileManipulator['get']>>, false>;
 type CommonlibPath = Parameters<DirectFileManipulator['get']>[0];
+type CommonlibDocumentId = Awaited<ReturnType<DirectFileManipulator['path2id']>>;
 type EnumeratedEntry = DirectFileManipulator extends {
   enumerateAllNormalDocs: (opt: { metaOnly: boolean }) => AsyncGenerator<infer T>;
 } ? T : never;
+
+type RawNote = {
+  _id: string;
+  _rev: string;
+  path?: unknown;
+  type?: unknown;
+  datatype?: unknown;
+  deleted?: unknown;
+  _deleted?: unknown;
+  children?: unknown;
+  eden?: unknown;
+  size?: unknown;
+  ctime?: unknown;
+};
 
 export interface CommonlibFile {
   content: string;
@@ -69,11 +83,11 @@ export class CommonlibFacade {
 
   async inspect(path: string): Promise<CommonlibFileMetadata | false> {
     await this.ready();
-    const entry = await this.manipulator.get(path as CommonlibPath, true);
-    if (!entry || !entry._rev || isDeleted(entry)) return false;
+    const entry = await this.rawNote(path);
+    if (!entry) return false;
     return {
       id: String(entry._id),
-      path,
+      path: typeof entry.path === 'string' ? entry.path : path,
       revision: entry._rev,
       datatype: noteDatatype(entry),
       size: typeof entry.size === 'number' ? entry.size : undefined,
@@ -81,14 +95,32 @@ export class CommonlibFacade {
     };
   }
 
-  async read(path: string): Promise<CommonlibFile | false> {
+  async read(path: string, maxBytes: number): Promise<CommonlibFile | false> {
     await this.ready();
-    const entry = await this.manipulator.get(path as CommonlibPath);
-    if (!entry || !entry._rev || isDeleted(entry)) return false;
+    const entry = await this.rawNote(path);
+    if (!entry) return false;
     if (noteDatatype(entry) !== 'plain') {
       throw Object.assign(new Error('unsupported LiveSync note type'), { code: 'unsupported' });
     }
-    return { content: entryData(entry), revision: entry._rev };
+    const children = entry.children;
+    if (!Array.isArray(children) || !children.every((id) => typeof id === 'string')) {
+      throw Object.assign(new Error('unsupported LiveSync note format'), { code: 'unsupported' });
+    }
+
+    const encoder = new TextEncoder();
+    const pieces: string[] = [];
+    let bytes = 0;
+    for (const childId of children) {
+      const inline = inlineChunk(entry.eden, childId);
+      const piece = inline ?? await this.rawChunk(childId);
+      if (piece === false) return false;
+      bytes += encoder.encode(piece).byteLength;
+      if (bytes > maxBytes) {
+        throw Object.assign(new Error('LiveSync note exceeds the read size limit'), { code: 'too_large' });
+      }
+      pieces.push(piece);
+    }
+    return { content: pieces.join(''), revision: entry._rev };
   }
 
   async write(
@@ -176,6 +208,31 @@ export class CommonlibFacade {
       // yet available, close() still shuts the HTTP adapter down.
     }
   }
+
+  private async rawNote(path: string): Promise<RawNote | false> {
+    const id = await this.manipulator.path2id(path as CommonlibPath);
+    try {
+      const entry = await this.manipulator.liveSyncLocalDB.getRaw(id) as unknown as RawNote;
+      if (!entry._rev || isDeleted(entry) || noteDatatype(entry) === 'leaf') return false;
+      return entry;
+    } catch (error) {
+      if (isMissing(error)) return false;
+      throw error;
+    }
+  }
+
+  private async rawChunk(id: string): Promise<string | false> {
+    try {
+      const chunk = await this.manipulator.liveSyncLocalDB.getRaw(id as CommonlibDocumentId) as unknown as {
+        type?: unknown;
+        data?: unknown;
+      };
+      return chunk.type === 'leaf' && typeof chunk.data === 'string' ? chunk.data : false;
+    } catch (error) {
+      if (isMissing(error)) return false;
+      throw error;
+    }
+  }
 }
 
 function listedMetadata(entry: EnumeratedEntry): CommonlibFileMetadata | undefined {
@@ -203,8 +260,12 @@ function noteDatatype(entry: { datatype?: unknown; type?: unknown }): string {
   return '';
 }
 
-function entryData(entry: LoadedEntry): string {
-  return Array.isArray(entry.data) ? entry.data.join('') : entry.data;
+function inlineChunk(eden: unknown, id: string): string | undefined {
+  if (!eden || typeof eden !== 'object') return undefined;
+  const value = (eden as Record<string, unknown>)[id];
+  if (!value || typeof value !== 'object') return undefined;
+  const data = (value as { data?: unknown }).data;
+  return typeof data === 'string' ? data : undefined;
 }
 
 function isConflict(error: unknown): boolean {

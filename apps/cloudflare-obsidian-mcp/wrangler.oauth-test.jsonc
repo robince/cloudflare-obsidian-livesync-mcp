@@ -1,0 +1,28 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "cloudflare-obsidian-mcp-oauth-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-02",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "POUCH_DATABASES",
+        "class_name": "PouchDatabase",
+        "script_name": "cloudflare-pouchdb"
+      }
+    ]
+  },
+  "vars": {
+    "VAULT_DATABASE": "test-vault",
+    "MCP_PUBLIC_BASE_URL": "https://mcp.test",
+    "MCP_WRITES_ENABLED": "false",
+    "GITHUB_ALLOWED_LOGINS": "robince"
+  }
+}

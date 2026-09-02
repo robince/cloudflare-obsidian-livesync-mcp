@@ -24,8 +24,10 @@ import type { VaultProfileInspection } from './profile';
 
 type VaultDependencies = {
   profile: () => Promise<VaultProfileInspection>;
-  acquireCommonlib: () => Promise<CommonlibFacade>;
-  releaseCommonlib: () => Promise<void>;
+  acquireCommonlib: (
+    profile: Extract<VaultProfileInspection, { supported: true }>,
+  ) => Promise<CommonlibFacade>;
+  releaseCommonlib: (commonlib: CommonlibFacade) => Promise<void>;
 };
 
 type Cursor = { v: 1; prefix: string; id: string };
@@ -95,11 +97,8 @@ export class LiveSyncVault {
       if (typeof meta.size === 'number' && meta.size > VAULT_LIMITS.maxReadBytes) {
         return failure('too_large', 'File exceeds the read size limit.');
       }
-      const file = await commonlib.read(parsed.data.path);
+      const file = await commonlib.read(parsed.data.path, VAULT_LIMITS.maxReadBytes);
       if (!file) return failure('not_found', 'File not found.');
-      if (new TextEncoder().encode(file.content).byteLength > VAULT_LIMITS.maxReadBytes) {
-        return failure('too_large', 'File exceeds the read size limit.');
-      }
       return success({ path: parsed.data.path, revision: file.revision, content: file.content });
     });
   }
@@ -141,7 +140,7 @@ export class LiveSyncVault {
         return failure('unsupported', 'Only plain Markdown notes can be updated.');
       }
       const written = await commonlib.write(
-        parsed.data.path,
+        existing.path,
         parsed.data.content,
         {
           ctime: existing.ctime ?? Date.now(),
@@ -151,7 +150,7 @@ export class LiveSyncVault {
         parsed.data.expectedRevision
       );
       if (!written) return failure('conflict', 'The file was modified by another client.');
-      return success({ path: parsed.data.path, revision: written.revision });
+      return success({ path: existing.path, revision: written.revision });
     });
   }
 
@@ -164,12 +163,15 @@ export class LiveSyncVault {
     return this.withCommonlib(async (commonlib) => {
       const existing = await commonlib.inspect(parsed.data.path);
       if (!existing) return failure('not_found', 'File not found.');
+      if (existing.datatype !== 'plain') {
+        return failure('unsupported', 'Only plain Markdown notes can be deleted.');
+      }
       if (existing.revision !== parsed.data.expectedRevision) {
         return failure('conflict', 'The file was modified by another client.');
       }
-      const removed = await commonlib.remove(parsed.data.path, parsed.data.expectedRevision);
+      const removed = await commonlib.remove(existing.path, parsed.data.expectedRevision);
       if (!removed) return failure('conflict', 'The file was modified by another client.');
-      return success({ path: parsed.data.path, revision: removed.revision });
+      return success({ path: existing.path, revision: removed.revision });
     });
   }
 
@@ -181,11 +183,11 @@ export class LiveSyncVault {
       if (!profile.supported) {
         return failure('unsupported', `Unsupported LiveSync vault (${profile.reasons.join(', ')}).`);
       }
-      const commonlib = await this.dependencies.acquireCommonlib();
+      const commonlib = await this.dependencies.acquireCommonlib(profile);
       try {
         return await operation(commonlib, profile);
       } finally {
-        await this.dependencies.releaseCommonlib();
+        await this.dependencies.releaseCommonlib(commonlib);
       }
     } catch (error) {
       return failure(errorCode(error), errorMessage(error));
@@ -218,7 +220,7 @@ function isListedMarkdown(
 
 function isSafePrefix(prefix: string): boolean {
   if (prefix === '') return true;
-  if (prefix.startsWith('/') || prefix.includes('\\') || prefix.includes('\0') || prefix.startsWith('h:')) return false;
+  if (prefix.startsWith('/') || prefix.includes('\\') || prefix.includes('\0') || prefix.includes(':')) return false;
   const segments = (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix).split('/');
   if (segments.some((segment) => segment === '_local' || segment === '_design')) return false;
   return segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..');

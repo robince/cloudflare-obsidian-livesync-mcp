@@ -101,6 +101,12 @@ in the write checkpoint below rather than removed or hidden.
 - stale edits and deletes return `conflict`;
 - writes are absent and denied when the kill switch is off;
 - write authorization requires both scopes and the runtime allowlist;
+- the real OAuth provider is exercised in workerd for DCR, PKCE, consent,
+  callback replay protection, token exchange, CSRF rejection, and allowlist
+  denial;
+- authenticated status, list, and read calls run through the real MCP HTTP
+  endpoint and a Wrangler-built storage Worker over the configured cross-script
+  Durable Object binding;
 - one local MCP-to-storage integration covers status, list, read, create, edit,
   and delete through the real Durable Object RPC boundary;
 - existing CouchDB replication tests remain green.
