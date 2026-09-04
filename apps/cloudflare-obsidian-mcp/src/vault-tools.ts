@@ -95,10 +95,17 @@ export type VaultToolAuth = {
 
 /** Creates a fresh stateless MCP server for one request. */
 export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): McpServer {
-  const server = new McpServer({
-    name: 'obsidian-livesync',
-    version: '0.1.0',
-  });
+  const server = new McpServer(
+    {
+      name: 'obsidian-livesync',
+      version: '0.1.0',
+    },
+    {
+      instructions: `Obsidian conventions:
+- Use the note's human-readable title as its filename, preserving spaces and capitalization (for example, "Cloudflare Haiku.md", not "cloudflare-haiku.md").
+- Do not repeat the filename as an H1 heading unless the user requests it; Obsidian already displays the filename as the note title.`,
+    },
+  );
   const handlers = createVaultToolHandlers(rpc, auth);
   const writeResult = z.object({ path: z.string(), revision: z.string() });
 
