@@ -25,14 +25,19 @@ The implementation passes workerd integration tests for:
   probes;
 - direct Durable Object RPC from another Worker.
 
-The protocol suite runs against both PouchDB 9 from npm and the current local
-`../pouchdb` checkout. This is a focused compatibility server, not a general
+The hermetic protocol suite runs against the pinned registry dependencies. A
+separate upstream-compatibility job checks out and builds current PouchDB before
+dependency upgrades and on its scheduled run. This is a focused compatibility server, not a general
 replacement for every CouchDB feature; see [COMPATIBILITY.md](COMPATIBILITY.md).
+
+The selected architecture and phased implementation plan for logical Obsidian
+vault access and a separate MCP Worker are documented in
+[MCP_PLAN.md](MCP_PLAN.md).
 
 ## Set up
 
-This workspace currently consumes the sibling adapter packages from
-`../pouchdb-adapter-sqlite` through local `file:` dependencies.
+This npm workspace uses one lockfile and registry-backed production
+dependencies; a clean clone does not require sibling repositories.
 
 ```sh
 npm install

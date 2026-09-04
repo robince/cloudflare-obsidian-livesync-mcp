@@ -3,23 +3,43 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "check": "tsc --noEmit",
-    "test": "vitest run test/worker.test.ts",
+    "postinstall": "node scripts/patch-commonlib-create-cas.mjs",
+    "check": "npm run check:dependencies && npm run check:storage && npm run check --workspaces --if-present",
+    "check:dependencies": "node --test test/production-dependencies.test.mjs && node scripts/check-production-dependencies.mjs",
+    "check:storage": "tsc --noEmit",
+    "test": "npm run test:dependencies && vitest run test/worker.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts test/vault-conflicts.test.ts && vitest run test/mcp-storage-integration.test.ts",
+    "test:dependencies": "node --test test/production-dependencies.test.mjs",
+    "fixture:livesync": "node scripts/generate-livesync-fixture.mjs",
     "test:current-pouchdb": "vitest run test/current-pouchdb.test.ts",
-    "test:all": "npm test && npm run test:current-pouchdb",
-    "types": "wrangler types",
-    "dry-run": "wrangler deploy --dry-run --outdir dist"
+    "test:all": "npm test && npm run test --workspaces --if-present && npm run test:staging-config",
+    "test:staging-config": "node --test test/staging-config.test.mjs",
+    "test:upstream-pouchdb": "npm run test:current-pouchdb",
+    "types": "npm run types:storage && npm run types --workspaces --if-present",
+    "types:check": "npm run types:check:storage && npm run types:check --workspaces --if-present",
+    "types:storage": "wrangler types",
+    "types:check:storage": "wrangler types --check",
+    "dry-run": "npm run dry-run:storage && npm run dry-run --workspaces --if-present",
+    "dry-run:storage": "wrangler deploy --dry-run --outdir dist/storage"
   },
   "dependencies": {
-    "pouchdb-adapter-cloudflare-do": "file:../pouchdb-adapter-sqlite/packages/pouchdb-adapter-cloudflare-do",
+    "@cloudflare-obsidian-livesync/contracts": "workspace:*",
+    "@robince/pouchdb-adapter-cloudflare-do": "1.1.2-cloudflare-do.0",
+    "@vrtmrz/livesync-commonlib": "0.1.19",
     "pouchdb-adapter-http": "^9.0.0",
-    "pouchdb-adapter-sqlite-core": "file:../pouchdb-adapter-sqlite/packages/pouchdb-adapter-sqlite-core",
+    "pouchdb-adapter-sqlite-core": "npm:@robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0",
     "pouchdb-core": "^9.0.0",
-    "pouchdb-replication": "^9.0.0"
+    "pouchdb-replication": "^9.0.0",
+    "xxhash-wasm-102": "npm:xxhash-wasm@1.1.0",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.0",
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "^24.0.0",
     "@types/pouchdb-core": "^7.0.15",
     "pouchdb-find": "^9.0.0",

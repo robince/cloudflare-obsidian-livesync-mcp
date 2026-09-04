@@ -1,10 +1,42 @@
 import { DurableObject } from 'cloudflare:workers';
+import cloudflareDOAdapter from '@robince/pouchdb-adapter-cloudflare-do';
 import PouchDB from 'pouchdb-core';
-import cloudflareDOAdapter from 'pouchdb-adapter-cloudflare-do';
+import type {
+  AppendVaultFileRequest,
+  CreateVaultFileRequest,
+  DeleteVaultFileRequest,
+  ListVaultAttachmentsData,
+  ListVaultAttachmentsRequest,
+  ListVaultFilesRequest,
+  ListVaultFilesData,
+  PatchVaultFileData,
+  PatchVaultFileRequest,
+  PatchVaultFrontmatterData,
+  PatchVaultFrontmatterRequest,
+  ReadVaultAttachmentData,
+  ReadVaultAttachmentRequest,
+  ReadVaultFileRequest,
+  ReadVaultFileData,
+  ReadVaultFrontmatterData,
+  ReadVaultFrontmatterRequest,
+  UpdateVaultFileRequest,
+  VaultResult,
+  VaultStatusData,
+  WriteVaultFileData,
+} from '@cloudflare-obsidian-livesync/contracts';
 
 import { booleanParam, couchError, json, jsonParam, pouchError, readJson } from './http';
 import { matchesSelector } from './selector';
+import { createInProcessCouchFetch } from './livesync-vault/in-process-couch-fetch';
+import {
+  inspectVaultProfile,
+  MILESTONE_DOCUMENT_ID,
+  SYNC_PARAMETERS_DOCUMENT_ID,
+  type VaultProfileInspection,
+} from './livesync-vault/profile';
 import type { DatabaseInfo, JsonObject } from './types';
+import type { CommonlibFacade } from './livesync-vault/commonlib';
+import { LiveSyncVault } from './livesync-vault/vault';
 
 PouchDB.plugin(cloudflareDOAdapter);
 
@@ -34,6 +66,7 @@ interface FindRequest {
 export class PouchDatabase extends DurableObject<Env> {
   private db?: AnyDatabase;
   private dbName?: string;
+  private activeChangeLongpolls = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -110,10 +143,107 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.database(name).allDocs(options);
   }
 
+  /**
+   * The public semantic RPC deliberately has no database parameter. This
+   * Durable Object owns exactly one persisted database identity.
+   */
+  async vaultStatus(): Promise<VaultResult<VaultStatusData>> {
+    return this.vault().status();
+  }
+
+  async listVaultFiles(request: ListVaultFilesRequest): Promise<VaultResult<ListVaultFilesData>> {
+    return this.vault().list(request);
+  }
+
+  async listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>> {
+    return this.vault().listAttachments(request);
+  }
+
+  async readVaultFile(request: ReadVaultFileRequest): Promise<VaultResult<ReadVaultFileData>> {
+    return this.vault().read(request);
+  }
+
+  async readVaultAttachment(request: ReadVaultAttachmentRequest): Promise<VaultResult<ReadVaultAttachmentData>> {
+    return this.vault().readAttachment(request);
+  }
+
+  async readVaultFrontmatter(request: ReadVaultFrontmatterRequest): Promise<VaultResult<ReadVaultFrontmatterData>> {
+    return this.vault().readFrontmatter(request);
+  }
+
+  async createVaultFile(request: CreateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    return this.vault().create(request);
+  }
+
+  async updateVaultFile(request: UpdateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    return this.vault().update(request);
+  }
+
+  async appendVaultFile(request: AppendVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    return this.vault().append(request);
+  }
+
+  async patchVaultFile(request: PatchVaultFileRequest): Promise<VaultResult<PatchVaultFileData>> {
+    return this.vault().patch(request);
+  }
+
+  async patchVaultFrontmatter(request: PatchVaultFrontmatterRequest): Promise<VaultResult<PatchVaultFrontmatterData>> {
+    return this.vault().patchFrontmatter(request);
+  }
+
+  async deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    return this.vault().delete(request);
+  }
+
   private requireExists(): void {
     if (!this.exists()) {
       throw Object.assign(new Error('Database does not exist.'), { status: 404, name: 'not_found' });
     }
+  }
+
+  private vault(): LiveSyncVault {
+    return new LiveSyncVault({
+      profile: async () => {
+        this.requireExists();
+        return this.inspectCommonlibProfile();
+      },
+      acquireCommonlib: (profile) => this.createCommonlib(profile),
+      releaseCommonlib: (commonlib) => commonlib.close(),
+    });
+  }
+
+  private async createCommonlib(profile: VaultProfileInspection): Promise<CommonlibFacade> {
+    this.requireExists();
+    if (!this.dbName) throw new Error('database identity is required');
+    const { CommonlibFacade } = await import('./livesync-vault/commonlib');
+    return new CommonlibFacade(
+      this.dbName,
+      this.inProcessCouchFetch(),
+      profile
+    );
+  }
+
+  private async inspectCommonlibProfile(): Promise<VaultProfileInspection> {
+    const db = this.database();
+    const getOptional = async (id: string): Promise<JsonObject | undefined> => {
+      try {
+        return await db.get(id) as JsonObject;
+      } catch (error) {
+        if (isMissingDocument(error)) return undefined;
+        throw error;
+      }
+    };
+    const [milestone, syncParameters] = await Promise.all([
+      getOptional(MILESTONE_DOCUMENT_ID),
+      getOptional(SYNC_PARAMETERS_DOCUMENT_ID),
+    ]);
+    return inspectVaultProfile(milestone, syncParameters);
+  }
+
+  private inProcessCouchFetch(): typeof globalThis.fetch {
+    if (!this.dbName) throw new Error('database identity is required');
+    const databaseName = this.dbName;
+    return createInProcessCouchFetch(databaseName, async (request) => await this.fetch(request));
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -284,7 +414,12 @@ export class PouchDatabase extends DurableObject<Env> {
     let result = await query();
     if (url.searchParams.get('feed') === 'longpoll' && result.results.length === 0) {
       const timeout = Math.min(numberParam(url, 'timeout') ?? 25_000, 55_000);
-      await waitForChange(db, since, timeout);
+      this.activeChangeLongpolls += 1;
+      try {
+        await waitForChange(db, since, timeout, request.signal);
+      } finally {
+        this.activeChangeLongpolls -= 1;
+      }
       result = await query();
     }
     if (url.searchParams.get('feed') === 'continuous') {
@@ -463,22 +598,33 @@ function ensureDocumentSize(document: JsonObject): void {
   }
 }
 
-async function waitForChange(db: AnyDatabase, since: string | number, timeoutMs: number): Promise<void> {
+function isMissingDocument(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'status' in error && error.status === 404;
+}
+
+async function waitForChange(
+  db: AnyDatabase,
+  since: string | number,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const feed = db.changes({ since, live: true, return_docs: false });
-    const timer = setTimeout(() => {
-      feed.cancel();
-      resolve();
-    }, timeoutMs);
-    feed.once('change', () => {
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
       feed.cancel();
-      resolve();
-    });
-    feed.once('error', (error: unknown) => {
-      clearTimeout(timer);
-      reject(error);
-    });
+      error === undefined ? resolve() : reject(error);
+    };
+    const abort = () => finish(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    const timer = setTimeout(() => finish(), timeoutMs);
+    feed.once('change', () => finish());
+    feed.once('error', (error: unknown) => finish(error));
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
   });
 }
 
