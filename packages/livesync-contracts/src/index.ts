@@ -176,11 +176,14 @@ export type PatchVaultFileData = z.infer<typeof patchVaultFileDataSchema>;
 export const readVaultFrontmatterRequestSchema = readVaultFileRequestSchema;
 export type ReadVaultFrontmatterRequest = ReadVaultFileRequest;
 
-export const jsonValueSchema: z.ZodType<unknown> = z.unknown().superRefine((value, context) => {
+export const jsonValueSchema: z.ZodType<unknown> = z.json().superRefine((value, context) => {
   const problem = boundedJsonProblem(value);
   if (problem) context.addIssue({ code: 'custom', message: problem });
 });
-export const frontmatterSchema = z.record(z.string().min(1).max(256), z.unknown())
+export const frontmatterSchema: z.ZodType<Record<string, unknown>> = z.record(
+  z.string().min(1).max(256),
+  z.json(),
+)
   .superRefine((value, context) => {
     const problem = boundedJsonProblem(value);
     if (problem) context.addIssue({ code: 'custom', message: problem });

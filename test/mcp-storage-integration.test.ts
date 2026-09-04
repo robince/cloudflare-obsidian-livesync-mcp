@@ -82,6 +82,17 @@ describe('MCP to storage Durable Object integration', () => {
       'vault_status', 'list_files', 'search_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
       'create_file', 'edit_file', 'append_file', 'patch_file', 'patch_frontmatter', 'delete_file',
     ]);
+    const patchFrontmatter = tools.tools.find((tool) => tool.name === 'patch_frontmatter');
+    expect(patchFrontmatter?.inputSchema.properties?.updates).toMatchObject({
+      type: 'object',
+      additionalProperties: expect.objectContaining({ $ref: expect.any(String) }),
+    });
+    const readFrontmatter = tools.tools.find((tool) => tool.name === 'read_frontmatter');
+    const readOutputProperties = readFrontmatter?.outputSchema?.properties as Record<string, unknown> | undefined;
+    expect(readOutputProperties?.frontmatter).toMatchObject({
+      type: 'object',
+      additionalProperties: expect.objectContaining({ $ref: expect.any(String) }),
+    });
     await expect(client.callTool({ name: 'vault_status', arguments: {} })).resolves.toMatchObject({
       structuredContent: { compatible: true },
     });
