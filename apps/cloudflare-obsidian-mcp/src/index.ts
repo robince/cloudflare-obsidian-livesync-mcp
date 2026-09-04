@@ -347,7 +347,7 @@ function htmlResponse(body: string, setCookie: string): Response {
   return new Response(body, {
     headers: {
       'content-type': 'text/html; charset=utf-8',
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'",
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
       'set-cookie': setCookie,
