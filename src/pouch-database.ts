@@ -19,6 +19,8 @@ import type {
   ReadVaultFileData,
   ReadVaultFrontmatterData,
   ReadVaultFrontmatterRequest,
+  SearchVaultFilesData,
+  SearchVaultFilesRequest,
   UpdateVaultFileRequest,
   VaultResult,
   VaultStatusData,
@@ -37,6 +39,7 @@ import {
 import type { DatabaseInfo, JsonObject } from './types';
 import type { CommonlibFacade } from './livesync-vault/commonlib';
 import { LiveSyncVault } from './livesync-vault/vault';
+import { LiveSyncSearch } from './livesync-vault/search';
 
 PouchDB.plugin(cloudflareDOAdapter);
 
@@ -47,6 +50,7 @@ const MAX_ATTACHMENT_BYTES = 900_000;
 
 type AnyDatabase = PouchDB.Database<JsonObject> & {
   bulkGet(options: JsonObject): Promise<JsonObject>;
+  id(): Promise<string>;
   purge(id: string, rev: string): Promise<JsonObject>;
 };
 
@@ -155,6 +159,10 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.vault().list(request);
   }
 
+  async searchVaultFiles(request: SearchVaultFilesRequest): Promise<VaultResult<SearchVaultFilesData>> {
+    return this.search().search(request);
+  }
+
   async listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>> {
     return this.vault().listAttachments(request);
   }
@@ -203,6 +211,22 @@ export class PouchDatabase extends DurableObject<Env> {
 
   private vault(): LiveSyncVault {
     return new LiveSyncVault({
+      profile: async () => {
+        this.requireExists();
+        return this.inspectCommonlibProfile();
+      },
+      acquireCommonlib: (profile) => this.createCommonlib(profile),
+      releaseCommonlib: (commonlib) => commonlib.close(),
+    });
+  }
+
+  private search(): LiveSyncSearch {
+    return new LiveSyncSearch({
+      storage: this.ctx.storage,
+      database: () => {
+        this.requireExists();
+        return this.database();
+      },
       profile: async () => {
         this.requireExists();
         return this.inspectCommonlibProfile();
@@ -468,6 +492,7 @@ export class PouchDatabase extends DurableObject<Env> {
       for (const revision of revisions) await db.purge(id, revision);
       purged[id] = revisions;
     }
+    this.search().invalidatePurgedDocuments(Object.keys(purged));
     return json({ purge_seq: null, purged });
   }
 

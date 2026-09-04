@@ -39,6 +39,7 @@ Supported tools:
 
 - `vault_status`
 - `list_files`
+- `search_files`
 - `read_file`
 - `read_frontmatter`
 - `list_attachments`
@@ -55,7 +56,7 @@ Not supported:
 - move, rename, or bulk mutations;
 - encryption or path obfuscation;
 - attachment writes or attachments larger than the bounded MCP response;
-- search, FTS5 indexing, or automatic chunk garbage collection;
+- automatic chunk garbage collection;
 - historical LiveSync versions.
 
 All derived Markdown writes require the exact LiveSync revision returned by a
@@ -64,6 +65,35 @@ read or successful write. `append_file` appends the supplied text verbatim.
 `replaceAll` is explicitly true. Frontmatter tools operate on top-level YAML
 keys while preserving the Markdown body. Listings expose LiveSync metadata
 without reading every file body.
+
+`search_files` uses a disposable per-vault FTS5 index. It indexes only the
+deterministic winning revision and reports unresolved branch counts without
+merging them. Catch-up is on demand from a persisted `_changes` checkpoint;
+backlogs and missing chunks return `unavailable` instead of stale results.
+Raw Markdown/frontmatter is searched with literal AND terms and BM25 ranking.
+
+## Completed implementation checkpoint — derived vault search
+
+Contract v4 adds read-scoped `search_files` without changing LiveSync's
+authoritative documents or replication protocol. The storage Durable Object
+owns private `livesync_search_*` tables, validates the PouchDB database identity,
+and transactionally couples each derived row replacement or exclusion with its
+numeric `_changes` checkpoint. Search schema changes discard and rebuild the
+sidecar rather than migrate it.
+
+Each search captures an update-sequence watermark and spends at most three
+seconds reconciling pages of 100. Non-metadata changes advance cheaply. A
+Markdown winner is reconstructed only when its revision changed or its FTS row
+needs repair. Missing chunks stop at that metadata sequence until replication
+completes; oversized and permanently unreadable winners advance as explicit
+exclusions. Purge removes affected rows and resets the checkpoint, while normal
+compaction leaves it intact.
+
+The public query is bounded to 256 UTF-8 bytes and 16 literal terms, defaults
+to 20 results, and caps at 50. Results are BM25-ranked across path, title, and
+body, tie-broken by path, with 1 KiB snippets and a 128 KiB response ceiling.
+Fuzzy search, word prefixes, field queries, pagination, alarms, Cron Triggers,
+write-path hooks, and public scores remain deferred pending measured need.
 
 ## Completed checkpoints
 

@@ -41,6 +41,12 @@ export interface CommonlibFile {
   revision: string;
 }
 
+export type CommonlibSearchFile =
+  | { kind: 'file'; content: string; revision: string; unresolvedVersions: number }
+  | { kind: 'missing' }
+  | { kind: 'pending' }
+  | { kind: 'excluded'; revision: string; unresolvedVersions: number; reason: 'too_large' | 'unreadable' };
+
 export interface CommonlibFileMetadata {
   id: string;
   path: string;
@@ -138,6 +144,37 @@ export class CommonlibFacade {
       pieces.push(piece);
     }
     return { content: pieces.join(''), revision: entry._rev };
+  }
+
+  /** Search-only read of the deterministic winner. Never merges or removes conflict leaves. */
+  async readWinningForSearch(path: string, maxBytes: number): Promise<CommonlibSearchFile> {
+    await this.ready();
+    const entry = await this.conflictNote(path);
+    if (!entry || isDeleted(entry) || noteDatatype(entry) !== 'plain') return { kind: 'missing' };
+    const unresolvedVersions = 1 + (entry._conflicts?.length ?? 0);
+    const children = entry.children;
+    if (!Array.isArray(children) || !children.every((id) => typeof id === 'string')) {
+      return { kind: 'excluded', revision: entry._rev, unresolvedVersions, reason: 'unreadable' };
+    }
+
+    const encoder = new TextEncoder();
+    const pieces: string[] = [];
+    let bytes = 0;
+    for (const childId of children) {
+      const inline = inlineChunk(entry.eden, childId);
+      const chunk = inline === undefined ? await this.rawChunkForSearch(childId) : { kind: 'file' as const, content: inline };
+      if (chunk.kind === 'missing') return { kind: 'pending' };
+      if (chunk.kind === 'unreadable') {
+        return { kind: 'excluded', revision: entry._rev, unresolvedVersions, reason: 'unreadable' };
+      }
+      const piece = chunk.content;
+      bytes += encoder.encode(piece).byteLength;
+      if (bytes > maxBytes) {
+        return { kind: 'excluded', revision: entry._rev, unresolvedVersions, reason: 'too_large' };
+      }
+      pieces.push(piece);
+    }
+    return { kind: 'file', content: pieces.join(''), revision: entry._rev, unresolvedVersions };
   }
 
   async readBinary(path: string, maxBytes: number): Promise<CommonlibBinaryFile | false> {
@@ -404,6 +441,23 @@ export class CommonlibFacade {
       return chunk.type === 'leaf' && typeof chunk.data === 'string' ? chunk.data : false;
     } catch (error) {
       if (isMissing(error)) return false;
+      throw error;
+    }
+  }
+
+  private async rawChunkForSearch(
+    id: string,
+  ): Promise<{ kind: 'file'; content: string } | { kind: 'missing' } | { kind: 'unreadable' }> {
+    try {
+      const chunk = await this.manipulator.liveSyncLocalDB.getRaw(id as CommonlibDocumentId) as unknown as {
+        type?: unknown;
+        data?: unknown;
+      };
+      return chunk.type === 'leaf' && typeof chunk.data === 'string'
+        ? { kind: 'file', content: chunk.data }
+        : { kind: 'unreadable' };
+    } catch (error) {
+      if (isMissing(error)) return { kind: 'missing' };
       throw error;
     }
   }

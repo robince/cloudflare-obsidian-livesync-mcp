@@ -41,7 +41,7 @@ describe('vault RPC', () => {
 
     expect(status).toEqual({
       ok: true,
-      data: { contractVersion: 3, compatible: true, reasons: [] },
+      data: { contractVersion: 4, compatible: true, reasons: [] },
     });
   });
 
@@ -65,6 +65,291 @@ describe('vault RPC', () => {
 
     const mismatched = await stub.listVaultFiles({ prefix: '', cursor: first.data.cursor });
     expect(mismatched).toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+  });
+
+  it('builds and reuses a derived Unicode FTS index with literal path scoping', async () => {
+    const { stub } = await seededVault('search');
+    const first = await stub.searchVaultFiles({ query: 'naive', pathPrefix: 'notes/' });
+    expect(first).toMatchObject({
+      ok: true,
+      data: {
+        results: [expect.objectContaining({ path: 'notes/unicode-雪.md', snippet: expect.stringContaining('⟦') })],
+        truncated: false,
+        incomplete: false,
+        unindexedFiles: 0,
+      },
+    });
+    const before = await runInDurableObject(stub, (instance: PouchDatabase) => ({
+      checkpoint: instance['ctx'].storage.sql
+        .exec<{ value: string }>("SELECT value FROM livesync_search_meta WHERE key='checkpoint'").one().value,
+      rows: instance['ctx'].storage.sql
+        .exec<{ count: number }>('SELECT COUNT(*) AS count FROM livesync_search_fts').one().count,
+    }));
+    await expect(stub.searchVaultFiles({ query: 'MCP fixture', pathPrefix: 'notes/' })).resolves.toMatchObject({
+      ok: true,
+      data: { results: [expect.objectContaining({ path: 'notes/frontmatter.md' })] },
+    });
+    await expect(stub.searchVaultFiles({ query: 'MCP fixture', pathPrefix: 'other/' })).resolves.toMatchObject({
+      ok: true,
+      data: { results: [] },
+    });
+    await expect(stub.searchVaultFiles({ query: '" OR *' })).resolves.toMatchObject({ ok: true });
+    const after = await runInDurableObject(stub, (instance: PouchDatabase) => ({
+      checkpoint: instance['ctx'].storage.sql
+        .exec<{ value: string }>("SELECT value FROM livesync_search_meta WHERE key='checkpoint'").one().value,
+      rows: instance['ctx'].storage.sql
+        .exec<{ count: number }>('SELECT COUNT(*) AS count FROM livesync_search_fts').one().count,
+    }));
+    expect(after).toEqual(before);
+  });
+
+  it('weights path and title above body and breaks equal BM25 scores by path', async () => {
+    const { stub } = await seededVault('search-ranking');
+    await stub.createVaultFile({ path: 'notes/needle.md', content: 'unrelated body\n' });
+    await stub.createVaultFile({ path: 'notes/body-only.md', content: 'needle\n' });
+    await stub.createVaultFile({ path: 'notes/tie-b.md', content: 'equalrank\n' });
+    await stub.createVaultFile({ path: 'notes/tie-a.md', content: 'equalrank\n' });
+    await stub.createVaultFile({ path: 'notes/100%_literal.md', content: 'prefixmarker\n' });
+
+    const weighted = await stub.searchVaultFiles({ query: 'needle' });
+    expect(weighted).toMatchObject({ ok: true });
+    if (weighted.ok) expect(weighted.data.results.map(({ path }) => path).slice(0, 2)).toEqual([
+      'notes/needle.md',
+      'notes/body-only.md',
+    ]);
+    const tied = await stub.searchVaultFiles({ query: 'equalrank' });
+    if (tied.ok) expect(tied.data.results.map(({ path }) => path)).toEqual(['notes/tie-a.md', 'notes/tie-b.md']);
+    await expect(stub.searchVaultFiles({ query: 'prefixmarker', pathPrefix: 'notes/100%_' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path: 'notes/100%_literal.md' })] },
+    });
+  });
+
+  it('waits for late chunks and excludes oversized or malformed winners without partial search', async () => {
+    const { name, stub } = await seededVault('search-repair');
+    await stub.putDocument(name, {
+      _id: 'notes/late.md', path: 'notes/late.md', type: 'plain', datatype: 'plain',
+      children: ['h:late-search'], size: 10, ctime: 1, mtime: 1, eden: {},
+    });
+    await expect(stub.searchVaultFiles({ query: 'replicated' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unavailable' },
+    });
+    const pending = await runInDurableObject(stub, (instance: PouchDatabase) => ({
+      rows: instance['ctx'].storage.sql
+        .exec<{ count: number }>("SELECT COUNT(*) AS count FROM livesync_search_documents WHERE path='notes/late.md'").one().count,
+      checkpoint: Number(instance['ctx'].storage.sql
+        .exec<{ value: string }>("SELECT value FROM livesync_search_meta WHERE key='checkpoint'").one().value),
+    }));
+    expect(pending.rows).toBe(0);
+
+    await stub.putDocument(name, { _id: 'h:late-search', type: 'leaf', data: 'fully replicated content' });
+    await expect(stub.searchVaultFiles({ query: 'replicated' })).resolves.toMatchObject({
+      ok: true,
+      data: { results: [expect.objectContaining({ path: 'notes/late.md' })] },
+    });
+
+    await stub.putDocument(name, { _id: 'h:oversized-search-1', type: 'leaf', data: 'x'.repeat(300_000) });
+    await stub.putDocument(name, { _id: 'h:oversized-search-2', type: 'leaf', data: 'y'.repeat(300_000) });
+    await stub.putDocument(name, {
+      _id: 'notes/oversized-search.md', path: 'notes/oversized-search.md', type: 'plain', datatype: 'plain',
+      children: ['h:oversized-search-1', 'h:oversized-search-2'], size: 600_000, ctime: 1, mtime: 1, eden: {},
+    });
+    await stub.putDocument(name, {
+      _id: 'notes/malformed-search.md', path: 'notes/malformed-search.md', type: 'plain', datatype: 'plain',
+      children: 'not-an-array', size: 1, ctime: 1, mtime: 1, eden: {},
+    });
+    await expect(stub.searchVaultFiles({ query: 'replicated' })).resolves.toMatchObject({
+      ok: true,
+      data: { incomplete: true, unindexedFiles: 2 },
+    });
+    const repairedCheckpoint = await runInDurableObject(stub, (instance: PouchDatabase) => Number(
+      instance['ctx'].storage.sql
+        .exec<{ value: string }>("SELECT value FROM livesync_search_meta WHERE key='checkpoint'").one().value,
+    ));
+    expect(repairedCheckpoint).toBeGreaterThan(pending.checkpoint);
+  });
+
+  it('updates and removes indexed MCP winners and rebuilds disposable search schema', async () => {
+    const { stub } = await seededVault('search-lifecycle');
+    const created = await stub.createVaultFile({ path: 'notes/search-lifecycle.md', content: 'old searchable phrase\n' });
+    expect(created.ok).toBe(true);
+    await expect(stub.searchVaultFiles({ query: 'old searchable' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path: 'notes/search-lifecycle.md' })] },
+    });
+    if (!created.ok) return;
+    const updated = await stub.updateVaultFile({
+      path: 'notes/search-lifecycle.md', content: 'new searchable phrase\n', expectedRevision: created.data.revision,
+    });
+    expect(updated.ok).toBe(true);
+    await expect(stub.searchVaultFiles({ query: 'old' })).resolves.toMatchObject({ ok: true, data: { results: [] } });
+    await expect(stub.searchVaultFiles({ query: 'new' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path: 'notes/search-lifecycle.md' })] },
+    });
+
+    await runInDurableObject(stub, (instance: PouchDatabase) => {
+      instance['ctx'].storage.sql.exec("UPDATE livesync_search_meta SET value='obsolete' WHERE key='schema_version'");
+    });
+    await expect(stub.searchVaultFiles({ query: 'new' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path: 'notes/search-lifecycle.md' })] },
+    });
+    if (!updated.ok) return;
+    await stub.deleteVaultFile({ path: 'notes/search-lifecycle.md', expectedRevision: updated.data.revision });
+    await expect(stub.searchVaultFiles({ query: 'new' })).resolves.toMatchObject({ ok: true, data: { results: [] } });
+  });
+
+  it('refreshes conflict counts without changing or retokenising an unchanged winner', async () => {
+    const { name, stub } = await seededVault('search-conflict-count');
+    const path = 'notes/search-conflict-count.md';
+    const created = await stub.createVaultFile({ path, content: 'winning searchable content\n' });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const first = await stub.searchVaultFiles({ query: 'winning' });
+    expect(first).toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path, revision: created.data.revision })] },
+    });
+    await stub.putDocument(name, { _id: 'h:losing-search-conflict', type: 'leaf', data: 'losing branch content\n' });
+    const conflict = await stub.fetch(new Request('https://test/_bulk_docs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-pouchdb-database': name },
+      body: JSON.stringify({
+        new_edits: false,
+        docs: [{
+          _id: path,
+          _rev: '1-00000000000000000000000000000000',
+          _revisions: { start: 1, ids: ['00000000000000000000000000000000'] },
+          path,
+          type: 'plain',
+          datatype: 'plain',
+          children: ['h:losing-search-conflict'],
+          size: 22,
+          ctime: 1,
+          mtime: 1,
+          eden: {},
+        }],
+      }),
+    }));
+    expect(conflict.status).toBe(201);
+    const treeBefore = await stub.getDocument(name, path, { conflicts: true }) as unknown as JsonObject;
+    expect(treeBefore._rev).toBe(created.data.revision);
+    await expect(stub.searchVaultFiles({ query: 'winning' })).resolves.toMatchObject({
+      ok: true,
+      data: { results: [expect.objectContaining({ path, revision: created.data.revision, unresolvedVersions: 2 })] },
+    });
+    await expect(stub.searchVaultFiles({ query: 'losing' })).resolves.toMatchObject({ ok: true, data: { results: [] } });
+    await expect(stub.getDocument(name, path, { conflicts: true })).resolves.toEqual(treeBefore);
+  });
+
+  it('indexes raw CouchDB bulk updates and removes CouchDB tombstones', async () => {
+    const { name, stub } = await seededVault('search-bulk-docs');
+    const path = 'notes/frontmatter.md';
+    await stub.searchVaultFiles({ query: 'MCP fixture' });
+    await stub.putDocument(name, { _id: 'h:raw-search-update', type: 'leaf', data: 'raw replicated winner\n' });
+    const current = await stub.getDocument(name, path) as unknown as JsonObject;
+    const headers = { 'content-type': 'application/json', 'x-pouchdb-database': name };
+    const update = await stub.fetch(new Request('https://test/_bulk_docs', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ docs: [{
+        ...current,
+        children: ['h:raw-search-update'],
+        size: 22,
+        mtime: 2,
+      }] }),
+    }));
+    expect(update.status).toBe(201);
+    await expect(stub.searchVaultFiles({ query: 'replicated winner' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path })] },
+    });
+
+    const updated = await stub.getDocument(name, path) as unknown as JsonObject;
+    const removed = await stub.fetch(new Request('https://test/_bulk_docs', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ docs: [{ _id: path, _rev: updated._rev, _deleted: true }] }),
+    }));
+    expect(removed.status).toBe(201);
+    await expect(stub.searchVaultFiles({ query: 'replicated winner' })).resolves.toMatchObject({
+      ok: true, data: { results: [] },
+    });
+  });
+
+  it('bounds search results and snippets and preserves progress at the catch-up deadline', async () => {
+    const { stub } = await seededVault('search-bounds');
+    const token = 'z'.repeat(200);
+    for (let index = 0; index < 3; index += 1) {
+      await stub.createVaultFile({
+        path: `notes/bounded-${index}.md`,
+        content: `${token} `.repeat(30),
+      });
+    }
+    const timedOut = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const originalNow = Date.now;
+      let calls = 0;
+      Date.now = () => calls++ < 10 ? 0 : 3_000;
+      try {
+        const result = await instance.searchVaultFiles({ query: token, limit: 2 });
+        const checkpoint = Number(instance['ctx'].storage.sql
+          .exec<{ value: string }>("SELECT value FROM livesync_search_meta WHERE key='checkpoint'").one().value);
+        const target = Number((await instance['database']().info()).update_seq);
+        return { result, checkpoint, target };
+      } finally {
+        Date.now = originalNow;
+      }
+    });
+    expect(timedOut.result).toMatchObject({ ok: false, error: { code: 'unavailable' } });
+    expect(timedOut.checkpoint).toBeGreaterThan(0);
+    expect(timedOut.checkpoint).toBeLessThan(timedOut.target);
+
+    const result = await stub.searchVaultFiles({ query: token, limit: 2 });
+    expect(result).toMatchObject({
+      ok: true,
+      data: { results: [{}, {}], truncated: true },
+    });
+    if (!result.ok) return;
+    expect(result.data.results.every(
+      ({ snippet }) => new TextEncoder().encode(snippet).byteLength <= 1_024,
+    )).toBe(true);
+    expect(new TextEncoder().encode(JSON.stringify(result.data)).byteLength).toBeLessThanOrEqual(128 * 1_024);
+  });
+
+  it('survives compaction, invalidates on purge, and clears stale rows after database recreation', async () => {
+    const { name, stub } = await seededVault('search-database-lifecycle');
+    await expect(stub.searchVaultFiles({ query: 'naive' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path: 'notes/unicode-雪.md' })] },
+    });
+    const headers = { 'content-type': 'application/json', 'x-pouchdb-database': name };
+    const compact = await stub.fetch(new Request('https://test/_compact', { method: 'POST', headers }));
+    expect(compact.status).toBe(202);
+    await expect(stub.searchVaultFiles({ query: 'naive' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path: 'notes/unicode-雪.md' })] },
+    });
+
+    const current = await stub.getDocument(name, 'notes/unicode-雪.md') as unknown as JsonObject;
+    const purge = await stub.fetch(new Request('https://test/_purge', {
+      method: 'POST', headers, body: JSON.stringify({ 'notes/unicode-雪.md': [current._rev] }),
+    }));
+    expect(purge.status).toBe(200);
+    await expect(stub.searchVaultFiles({ query: 'naive' })).resolves.toMatchObject({
+      ok: true, data: { results: [] },
+    });
+
+    const removed = await stub.fetch(new Request('https://test/', { method: 'DELETE', headers }));
+    expect(removed.status).toBe(200);
+    await stub.ensureDatabase(name);
+    for (const document of Object.values(fixture.localDocuments)) {
+      await stub.putDocument(name, withoutRevision(document as JsonObject));
+    }
+    await stub.putDocument(name, { _id: 'h:recreated-search', type: 'leaf', data: 'recreated database marker' });
+    await stub.putDocument(name, {
+      _id: 'notes/recreated.md', path: 'notes/recreated.md', type: 'plain', datatype: 'plain',
+      children: ['h:recreated-search'], size: 25, ctime: 1, mtime: 1, eden: {},
+    });
+    await expect(stub.searchVaultFiles({ query: 'recreated' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path: 'notes/recreated.md' })] },
+    });
+    await expect(stub.searchVaultFiles({ query: 'MCP fixture' })).resolves.toMatchObject({
+      ok: true, data: { results: [] },
+    });
   });
 
   it('omits invalid raw numeric metadata from public listings', async () => {
