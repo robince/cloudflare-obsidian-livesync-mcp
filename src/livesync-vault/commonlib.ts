@@ -12,6 +12,7 @@ import { VAULT_LIMITS } from '@cloudflare-obsidian-livesync/contracts';
 import { livesyncConflict, reconciledConflict, throwVaultError } from './conflicts';
 
 export const COMMONLIB_VERSION = '0.1.19';
+const MAX_SEARCH_CHUNKS = 1_024;
 
 type CommonlibPath = Parameters<DirectFileManipulator['get']>[0];
 type CommonlibDocumentId = Awaited<ReturnType<DirectFileManipulator['path2id']>>;
@@ -153,7 +154,8 @@ export class CommonlibFacade {
     if (!entry || isDeleted(entry) || noteDatatype(entry) !== 'plain') return { kind: 'missing' };
     const unresolvedVersions = 1 + (entry._conflicts?.length ?? 0);
     const children = entry.children;
-    if (!Array.isArray(children) || !children.every((id) => typeof id === 'string')) {
+    if (!Array.isArray(children) || children.length > MAX_SEARCH_CHUNKS
+      || !children.every((id) => typeof id === 'string')) {
       return { kind: 'excluded', revision: entry._rev, unresolvedVersions, reason: 'unreadable' };
     }
 

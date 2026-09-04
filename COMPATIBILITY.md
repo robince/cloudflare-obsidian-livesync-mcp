@@ -56,19 +56,22 @@ forwarding the CouchDB password.
 
 Each vault Durable Object keeps a private FTS5 index derived from the
 authoritative LiveSync revision tree. `search_files` catches it up from the
-persisted PouchDB `_changes` sequence on demand, in pages of 100 for at most
-three seconds. A backlog or a metadata winner whose chunks have not replicated
-returns `unavailable`; stale or partially reconstructed results are never
-returned. Compaction preserves the checkpoint. Purge resets reconciliation,
-and a changed PouchDB database identity clears and rebuilds all search state.
+persisted PouchDB `_changes` sequence on demand, in pages of 100 with a
+three-second budget checked between documents. A backlog or a metadata winner
+whose chunks have not replicated returns `unavailable`; stale or partially
+reconstructed results are never returned. A permanently orphaned chunk
+therefore blocks vault search until the LiveSync data is repaired. Compaction
+preserves the checkpoint. Purge resets reconciliation, and a changed PouchDB
+database identity clears and rebuilds all search state.
 
 Only the deterministic current winner is indexed. Search never performs CAS,
 conflict resolution, or authoritative writes; conflicted hits report
 `unresolvedVersions`. Path, title, and raw Markdown (including YAML
 frontmatter) use Unicode tokenization, diacritic removal, and BM25 ranking.
 Query terms are escaped literal text with implicit AND. Fuzzy and prefix-word
-matching are intentionally deferred. Winners over 512,000 bytes or permanently
-unreadable winners are excluded and counted as incomplete index coverage.
+matching are intentionally deferred. Winners over 512,000 bytes, winners with
+more than 1,024 referenced chunks, or permanently unreadable winners are
+excluded and counted as vault-wide incomplete index coverage.
 
 ## Semantic MCP conflicts
 

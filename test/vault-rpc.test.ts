@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
+import type PouchDB from 'pouchdb-core';
 import { describe, expect, it } from 'vitest';
 import xxhashNew from 'xxhash-wasm-102';
 
@@ -110,6 +111,7 @@ describe('vault RPC', () => {
     await stub.createVaultFile({ path: 'notes/tie-b.md', content: 'equalrank\n' });
     await stub.createVaultFile({ path: 'notes/tie-a.md', content: 'equalrank\n' });
     await stub.createVaultFile({ path: 'notes/100%_literal.md', content: 'prefixmarker\n' });
+    await stub.createVaultFile({ path: 'Notes/case-prefix.md', content: 'caseprefixmarker\n' });
 
     const weighted = await stub.searchVaultFiles({ query: 'needle' });
     expect(weighted).toMatchObject({ ok: true });
@@ -118,9 +120,13 @@ describe('vault RPC', () => {
       'notes/body-only.md',
     ]);
     const tied = await stub.searchVaultFiles({ query: 'equalrank' });
+    expect(tied).toMatchObject({ ok: true });
     if (tied.ok) expect(tied.data.results.map(({ path }) => path)).toEqual(['notes/tie-a.md', 'notes/tie-b.md']);
     await expect(stub.searchVaultFiles({ query: 'prefixmarker', pathPrefix: 'notes/100%_' })).resolves.toMatchObject({
       ok: true, data: { results: [expect.objectContaining({ path: 'notes/100%_literal.md' })] },
+    });
+    await expect(stub.searchVaultFiles({ query: 'caseprefixmarker', pathPrefix: 'notes/' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path: 'Notes/case-prefix.md' })] },
     });
   });
 
@@ -158,9 +164,14 @@ describe('vault RPC', () => {
       _id: 'notes/malformed-search.md', path: 'notes/malformed-search.md', type: 'plain', datatype: 'plain',
       children: 'not-an-array', size: 1, ctime: 1, mtime: 1, eden: {},
     });
+    await stub.putDocument(name, {
+      _id: 'notes/too-many-chunks.md', path: 'notes/too-many-chunks.md', type: 'plain', datatype: 'plain',
+      children: Array.from({ length: 1_025 }, (_, index) => `h:absent-${index}`),
+      size: 0, ctime: 1, mtime: 1, eden: {},
+    });
     await expect(stub.searchVaultFiles({ query: 'replicated' })).resolves.toMatchObject({
       ok: true,
-      data: { incomplete: true, unindexedFiles: 2 },
+      data: { incomplete: true, unindexedFiles: 3 },
     });
     const repairedCheckpoint = await runInDurableObject(stub, (instance: PouchDatabase) => Number(
       instance['ctx'].storage.sql
@@ -273,6 +284,88 @@ describe('vault RPC', () => {
     });
   });
 
+  it('removes a stale row when a raw winner stops being metadata', async () => {
+    const { name, stub } = await seededVault('search-invalid-path');
+    const path = 'notes/frontmatter.md';
+    await expect(stub.searchVaultFiles({ query: 'MCP fixture' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path })] },
+    });
+    const current = await stub.getDocument(name, path) as unknown as JsonObject;
+    delete current.path;
+    await stub.putDocument(name, current);
+    await expect(stub.searchVaultFiles({ query: 'MCP fixture' })).resolves.toMatchObject({
+      ok: true, data: { results: [] },
+    });
+  });
+
+  it('retries when _changes coalesces a document beyond the captured watermark', async () => {
+    const { name, stub } = await seededVault('search-watermark-race');
+    const path = 'notes/frontmatter.md';
+    await stub.searchVaultFiles({ query: 'MCP fixture' });
+    const beforeTarget = await stub.getDocument(name, path) as unknown as JsonObject;
+    beforeTarget.mtime = 2;
+    await stub.putDocument(name, beforeTarget);
+
+    const raced = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const db = instance['database']();
+      const originalChanges = db.changes.bind(db);
+      let injected = false;
+      db.changes = ((options: PouchDB.Core.ChangesOptions) => {
+        if (injected) return originalChanges(options);
+        injected = true;
+        return (async () => {
+          const afterTarget = await db.get(path) as unknown as JsonObject;
+          afterTarget.mtime = 3;
+          await db.put(afterTarget);
+          return await originalChanges(options);
+        })();
+      }) as typeof db.changes;
+      try {
+        return await instance.searchVaultFiles({ query: 'MCP fixture' });
+      } finally {
+        db.changes = originalChanges as typeof db.changes;
+      }
+    });
+    expect(raced).toMatchObject({ ok: false, error: { code: 'unavailable' } });
+    await expect(stub.searchVaultFiles({ query: 'MCP fixture' })).resolves.toMatchObject({
+      ok: true, data: { results: [expect.objectContaining({ path })] },
+    });
+  });
+
+  it('serializes concurrent search reconciliation within one vault', async () => {
+    const { stub } = await seededVault('search-serialization');
+    const maximumActive = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const originalSearch = instance['search'].bind(instance);
+      let releaseFirst!: () => void;
+      const firstMayFinish = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      let calls = 0;
+      let active = 0;
+      let maximum = 0;
+      instance['search'] = (() => ({
+        search: async () => {
+          calls += 1;
+          active += 1;
+          maximum = Math.max(maximum, active);
+          if (calls === 1) await firstMayFinish;
+          active -= 1;
+          return { ok: true, data: { results: [], truncated: false, incomplete: false, unindexedFiles: 0 } };
+        },
+      })) as unknown as typeof instance['search'];
+      try {
+        const first = instance.searchVaultFiles({ query: 'first' });
+        await Promise.resolve();
+        const second = instance.searchVaultFiles({ query: 'second' });
+        await Promise.resolve();
+        releaseFirst();
+        await Promise.all([first, second]);
+        return maximum;
+      } finally {
+        instance['search'] = originalSearch;
+      }
+    });
+    expect(maximumActive).toBe(1);
+  });
+
   it('bounds search results and snippets and preserves progress at the catch-up deadline', async () => {
     const { stub } = await seededVault('search-bounds');
     const token = 'z'.repeat(200);
@@ -348,6 +441,24 @@ describe('vault RPC', () => {
       ok: true, data: { results: [expect.objectContaining({ path: 'notes/recreated.md' })] },
     });
     await expect(stub.searchVaultFiles({ query: 'MCP fixture' })).resolves.toMatchObject({
+      ok: true, data: { results: [] },
+    });
+  });
+
+  it('invalidates search before a partially failing purge', async () => {
+    const { name, stub } = await seededVault('search-partial-purge');
+    await stub.searchVaultFiles({ query: 'naive' });
+    const current = await stub.getDocument(name, 'notes/unicode-雪.md') as unknown as JsonObject;
+    const response = await stub.fetch(new Request('https://test/_purge', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-pouchdb-database': name },
+      body: JSON.stringify({
+        'notes/unicode-雪.md': [current._rev],
+        'notes/missing.md': ['1-missing'],
+      }),
+    }));
+    expect(response.ok).toBe(false);
+    await expect(stub.searchVaultFiles({ query: 'naive' })).resolves.toMatchObject({
       ok: true, data: { results: [] },
     });
   });

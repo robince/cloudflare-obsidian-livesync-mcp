@@ -25,10 +25,11 @@ Frontmatter input is bounded to 512,000 encoded bytes, 32 nested levels, and
 Markdown revision (including raw YAML frontmatter) using a private derived
 FTS5 index. Plain query terms are combined with AND and ranked with BM25;
 FTS syntax, fuzzy matching, and prefix-word matching are not exposed. The index
-catches up on demand for up to three seconds, then asks the caller to retry
-rather than return stale results. Files over 512,000 bytes and permanently
-unreadable winners are excluded and reported through `incomplete` and
-`unindexedFiles`. Search snippets are untrusted vault content.
+uses a three-second catch-up budget checked between documents, then asks the
+caller to retry rather than return stale results. Files over 512,000 bytes,
+files with more than 1,024 chunks, and permanently unreadable winners are
+excluded and reported through the vault-wide `incomplete` and `unindexedFiles`
+coverage fields. Search snippets are untrusted vault content.
 
 ## Conflict feedback
 

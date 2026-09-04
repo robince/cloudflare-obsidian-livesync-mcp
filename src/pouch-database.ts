@@ -71,6 +71,7 @@ export class PouchDatabase extends DurableObject<Env> {
   private db?: AnyDatabase;
   private dbName?: string;
   private activeChangeLongpolls = 0;
+  private searchLifecycle = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -160,7 +161,7 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   async searchVaultFiles(request: SearchVaultFilesRequest): Promise<VaultResult<SearchVaultFilesData>> {
-    return this.search().search(request);
+    return this.withSearchLifecycle(() => this.search().search(request));
   }
 
   async listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>> {
@@ -234,6 +235,19 @@ export class PouchDatabase extends DurableObject<Env> {
       acquireCommonlib: (profile) => this.createCommonlib(profile),
       releaseCommonlib: (commonlib) => commonlib.close(),
     });
+  }
+
+  private async withSearchLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    // ponytail: one per-vault queue is enough; split it only if concurrent search/purge throughput matters.
+    const previous = this.searchLifecycle;
+    let release!: () => void;
+    this.searchLifecycle = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   private async createCommonlib(profile: VaultProfileInspection): Promise<CommonlibFacade> {
@@ -487,13 +501,17 @@ export class PouchDatabase extends DurableObject<Env> {
 
   private async purgeRoute(request: Request, db: AnyDatabase): Promise<Response> {
     const requested = await readJson<Record<string, string[]>>(request);
-    const purged: Record<string, string[]> = {};
-    for (const [id, revisions] of Object.entries(requested)) {
-      for (const revision of revisions) await db.purge(id, revision);
-      purged[id] = revisions;
-    }
-    this.search().invalidatePurgedDocuments(Object.keys(purged));
-    return json({ purge_seq: null, purged });
+    return this.withSearchLifecycle(async () => {
+      // Purge has no _changes entry. Invalidate first so a partial purge failure
+      // can only cause harmless replay, never a permanently stale search row.
+      this.search().invalidatePurgedDocuments(Object.keys(requested));
+      const purged: Record<string, string[]> = {};
+      for (const [id, revisions] of Object.entries(requested)) {
+        for (const revision of revisions) await db.purge(id, revision);
+        purged[id] = revisions;
+      }
+      return json({ purge_seq: null, purged });
+    });
   }
 
   private async viewRoute(request: Request, parts: string[], db: AnyDatabase): Promise<Response> {

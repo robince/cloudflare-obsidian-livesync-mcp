@@ -81,13 +81,15 @@ and transactionally couples each derived row replacement or exclusion with its
 numeric `_changes` checkpoint. Search schema changes discard and rebuild the
 sidecar rather than migrate it.
 
-Each search captures an update-sequence watermark and spends at most three
-seconds reconciling pages of 100. Non-metadata changes advance cheaply. A
-Markdown winner is reconstructed only when its revision changed or its FTS row
-needs repair. Missing chunks stop at that metadata sequence until replication
-completes; oversized and permanently unreadable winners advance as explicit
-exclusions. Purge removes affected rows and resets the checkpoint, while normal
-compaction leaves it intact.
+Each search captures an update-sequence watermark and uses a three-second
+budget, checked between documents, while reconciling pages of 100. Once one
+winner starts reconstruction it finishes or fails as a unit. Non-metadata
+changes advance cheaply. A Markdown winner is reconstructed only when its
+revision changed or its FTS row needs repair. Missing chunks stop at that
+metadata sequence until replication completes; oversized, over-1,024-chunk,
+and permanently unreadable winners advance as explicit exclusions. Purge
+removes affected rows and resets the checkpoint, while normal compaction leaves
+it intact.
 
 The public query is bounded to 256 UTF-8 bytes and 16 literal terms, defaults
 to 20 results, and caps at 50. Results are BM25-ranked across path, title, and

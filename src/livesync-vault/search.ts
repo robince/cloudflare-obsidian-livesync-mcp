@@ -11,7 +11,7 @@ import type { JsonObject } from '../types';
 import type { CommonlibFacade } from './commonlib';
 import type { VaultProfileInspection } from './profile';
 
-const SEARCH_SCHEMA_VERSION = '1';
+const SEARCH_SCHEMA_VERSION = '2';
 const SEARCH_CATCHUP_MS = 3_000;
 const SEARCH_CHANGES_PAGE = 100;
 
@@ -77,7 +77,15 @@ export class LiveSyncSearch {
         if (catchUp === 'catching_up') {
           return failure('unavailable', 'Search index is catching up with LiveSync changes. Retry search_files.');
         }
-        return { ok: true, data: this.query(parsed.data.query, pathPrefix, parsed.data.limit) };
+        return {
+          ok: true,
+          data: this.query(
+            parsed.data.query,
+            pathPrefix,
+            parsed.data.limit,
+            profile.handleFilenameCaseSensitive,
+          ),
+        };
       } finally {
         if (commonlib) await this.dependencies.releaseCommonlib(commonlib);
       }
@@ -111,6 +119,7 @@ export class LiveSyncSearch {
       fts_rowid INTEGER PRIMARY KEY AUTOINCREMENT,
       doc_id TEXT NOT NULL UNIQUE,
       path TEXT NOT NULL,
+      path_folded TEXT NOT NULL,
       revision TEXT NOT NULL,
       unresolved_versions INTEGER NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('indexed', 'excluded')),
@@ -167,8 +176,7 @@ export class LiveSyncSearch {
         if (Date.now() >= deadline) return 'catching_up';
         const changeSequence = sequence(change.seq);
         if (changeSequence > target) {
-          this.advanceCheckpoint(target);
-          return 'ready';
+          return 'catching_up';
         }
         const observed = change.doc as JsonObject | undefined;
         if (change.deleted || observed?._deleted === true) {
@@ -177,7 +185,7 @@ export class LiveSyncSearch {
           continue;
         }
         if (!observed || typeof observed.path !== 'string') {
-          this.advanceCheckpoint(changeSequence);
+          this.commitDelete(change.id, changeSequence);
           checkpoint = changeSequence;
           continue;
         }
@@ -232,9 +240,16 @@ export class LiveSyncSearch {
     return checkpoint >= target ? 'ready' : 'catching_up';
   }
 
-  private query(query: string, pathPrefix: string, requestedLimit?: number): SearchVaultFilesData {
+  private query(
+    query: string,
+    pathPrefix: string,
+    requestedLimit: number | undefined,
+    caseSensitive: boolean,
+  ): SearchVaultFilesData {
     const limit = requestedLimit ?? VAULT_LIMITS.defaultSearchLimit;
     const match = query.trim().split(/\s+/u).map((term) => `"${term.replaceAll('"', '""')}"`).join(' ');
+    const prefixColumn = caseSensitive ? 'd.path' : 'd.path_folded';
+    const comparablePrefix = caseSensitive ? pathPrefix : pathPrefix.toLowerCase();
     const rows = this.dependencies.storage.sql.exec<SearchRow>(
       `SELECT d.path, d.revision, d.unresolved_versions,
               snippet(livesync_search_fts, -1, '⟦', '⟧', '…', 24) AS snippet
@@ -242,12 +257,12 @@ export class LiveSyncSearch {
          JOIN livesync_search_documents d ON d.fts_rowid=livesync_search_fts.rowid
         WHERE livesync_search_fts MATCH ?
           AND d.status='indexed'
-          AND (?='' OR instr(d.path, ?)=1)
+          AND (?='' OR instr(${prefixColumn}, ?)=1)
         ORDER BY bm25(livesync_search_fts, 4.0, 8.0, 1.0), d.path ASC
         LIMIT ?`,
       match,
-      pathPrefix,
-      pathPrefix,
+      comparablePrefix,
+      comparablePrefix,
       limit + 1,
     ).toArray();
     const unindexedFiles = this.dependencies.storage.sql
@@ -349,9 +364,10 @@ export class LiveSyncSearch {
     if (existing) {
       this.dependencies.storage.sql.exec(
         `UPDATE livesync_search_documents
-            SET path=?, revision=?, unresolved_versions=?, status=?, exclusion_reason=?
+            SET path=?, path_folded=?, revision=?, unresolved_versions=?, status=?, exclusion_reason=?
           WHERE doc_id=?`,
         path,
+        path.toLowerCase(),
         revision,
         unresolvedVersions,
         status,
@@ -362,10 +378,11 @@ export class LiveSyncSearch {
     }
     return this.dependencies.storage.sql.exec<{ fts_rowid: number }>(
       `INSERT INTO livesync_search_documents
-        (doc_id, path, revision, unresolved_versions, status, exclusion_reason)
-       VALUES (?, ?, ?, ?, ?, ?) RETURNING fts_rowid`,
+        (doc_id, path, path_folded, revision, unresolved_versions, status, exclusion_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING fts_rowid`,
       documentId,
       path,
+      path.toLowerCase(),
       revision,
       unresolvedVersions,
       status,
