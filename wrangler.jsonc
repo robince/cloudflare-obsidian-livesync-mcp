@@ -15,6 +15,9 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PouchDatabase"] }
   ],
+  "secrets": {
+    "required": ["COUCHDB_PASSWORD"]
+  },
   "vars": {
     "COUCHDB_USERNAME": "admin",
     "CORS_ORIGINS": "app://obsidian.md,capacitor://localhost,http://localhost"

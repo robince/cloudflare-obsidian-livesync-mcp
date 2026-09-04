@@ -3,6 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "cloudflare": {
+    "bindings": {
+      "COUCHDB_PASSWORD": {
+        "description": "Choose a strong, unique password. You will enter this password in Obsidian LiveSync."
+      },
+      "COUCHDB_USERNAME": {
+        "description": "The username to enter in Obsidian LiveSync. The default is `admin`."
+      },
+      "CORS_ORIGINS": {
+        "description": "Allowed browser origins. The default supports Obsidian desktop, mobile, and local development."
+      }
+    }
+  },
   "workspaces": [
     "apps/*",
     "packages/*"

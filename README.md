@@ -5,6 +5,11 @@ SQLite Durable Object. Each CouchDB database name maps to one Durable Object,
 so its writes are serialised and its data remains isolated from every other
 database.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/robince/cloudflare-obsidian-livesync)
+
+See [DEPLOY.md](DEPLOY.md) for private-repository collaborator instructions,
+required secrets, and the public one-click deployment flow.
+
 The immediate target is Obsidian LiveSync. The same Durable Object also exposes
 RPC methods so another Worker can read and write the vault without going back
 through HTTP, for example an Obsidian MCP Worker.
@@ -34,7 +39,12 @@ The selected architecture and phased implementation plan for logical Obsidian
 vault access and a separate MCP Worker are documented in
 [MCP_PLAN.md](MCP_PLAN.md).
 
-## Set up
+## Deploy
+
+Follow [DEPLOY.md](DEPLOY.md) to deploy from this private repository with
+Wrangler. The Deploy to Cloudflare button works once the repository is public.
+
+## Local development
 
 This npm workspace uses one lockfile and registry-backed production
 dependencies; a clean clone does not require sibling repositories.
@@ -46,14 +56,6 @@ npm run types
 npm run check
 npm test
 npx wrangler dev
-```
-
-Set the production password as a Worker secret, then deploy:
-
-```sh
-npx wrangler secret put COUCHDB_PASSWORD
-npm run dry-run
-npx wrangler deploy
 ```
 
 `COUCHDB_USERNAME` and `CORS_ORIGINS` are non-secret variables in
