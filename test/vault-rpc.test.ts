@@ -141,6 +141,108 @@ describe('vault RPC', () => {
     });
   });
 
+  it('returns a JSON-compatible view of non-JSON YAML scalars', async () => {
+    const { stub } = await seededVault('frontmatter-scalars');
+    const content = [
+      '---',
+      'positive: .inf',
+      'negative: -.inf',
+      'notNumber: .nan',
+      'timestamp: !!timestamp 2024-01-15T12:34:56Z',
+      'binary: !!binary SGVsbG8=',
+      'nested:',
+      '  - .nan',
+      '  - !!timestamp 2024-01-15',
+      '---',
+      'Body',
+    ].join('\n');
+    const created = await stub.createVaultFile({ path: 'notes/scalars.md', content });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    await expect(stub.readVaultFrontmatter({ path: 'notes/scalars.md' })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        frontmatter: {
+          positive: '.inf',
+          negative: '-.inf',
+          notNumber: '.nan',
+          timestamp: '2024-01-15T12:34:56.000Z',
+          binary: 'SGVsbG8=',
+          nested: ['.nan', '2024-01-15T00:00:00.000Z'],
+        },
+      },
+    });
+
+    await expect(stub.patchVaultFrontmatter({
+      path: 'notes/scalars.md',
+      updates: {
+        positive: '.inf',
+        timestamp: '2024-01-15T12:34:56.000Z',
+        binary: 'SGVsbG8=',
+      },
+      expectedRevision: created.data.revision,
+    })).resolves.toEqual({
+      ok: true,
+      data: { path: 'notes/scalars.md', revision: created.data.revision, updated: [], removed: [] },
+    });
+    await expect(stub.readVaultFile({ path: 'notes/scalars.md' })).resolves.toMatchObject({
+      ok: true,
+      data: { revision: created.data.revision, content },
+    });
+  });
+
+  it('does not rewrite or advance revisions for semantic frontmatter no-ops', async () => {
+    const { stub } = await seededVault('frontmatter-noop');
+    const content = [
+      '---',
+      'status: active # preserve me',
+      'obsolete: true',
+      'settings:',
+      '  second: 2',
+      '  first: 1',
+      '---',
+      'Body',
+    ].join('\n');
+    const created = await stub.createVaultFile({ path: 'notes/noop.md', content });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const unchanged = await stub.patchVaultFrontmatter({
+      path: 'notes/noop.md',
+      updates: { status: 'active', settings: { first: 1, second: 2 } },
+      remove: ['missing'],
+      expectedRevision: created.data.revision,
+    });
+    expect(unchanged).toEqual({
+      ok: true,
+      data: { path: 'notes/noop.md', revision: created.data.revision, updated: [], removed: [] },
+    });
+    await expect(stub.readVaultFile({ path: 'notes/noop.md' })).resolves.toMatchObject({
+      ok: true,
+      data: { revision: created.data.revision, content },
+    });
+
+    const changed = await stub.patchVaultFrontmatter({
+      path: 'notes/noop.md',
+      updates: { status: 'active', next: 'yes' },
+      remove: ['obsolete', 'missing'],
+      expectedRevision: created.data.revision,
+    });
+    expect(changed).toMatchObject({
+      ok: true,
+      data: { updated: ['next'], removed: ['obsolete'] },
+    });
+    if (!changed.ok) return;
+    expect(changed.data.revision).not.toBe(created.data.revision);
+
+    await expect(stub.patchVaultFrontmatter({
+      path: 'notes/noop.md',
+      updates: { next: 'yes' },
+      expectedRevision: created.data.revision,
+    })).resolves.toMatchObject({ ok: false, error: { code: 'conflict' } });
+  });
+
   it('appends and patches exact text with revision preconditions and ambiguity checks', async () => {
     const { stub } = await seededVault('derived-writes');
     const created = await stub.createVaultFile({ path: 'notes/derived.md', content: 'alpha beta beta\n' });
@@ -177,6 +279,26 @@ describe('vault RPC', () => {
     await expect(stub.readVaultFile({ path: 'notes/derived.md' })).resolves.toMatchObject({
       ok: true,
       data: { content: 'alpha B B\ntail' },
+    });
+  });
+
+  it('treats dollar replacement patterns literally in a single-match patch', async () => {
+    const { stub } = await seededVault('literal-patch');
+    const created = await stub.createVaultFile({ path: 'notes/literal.md', content: 'before TOKEN after' });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const newText = "price is $& / $1 / $$ / $` / $' dollars";
+    const patched = await stub.patchVaultFile({
+      path: 'notes/literal.md',
+      oldText: 'TOKEN',
+      newText,
+      expectedRevision: created.data.revision,
+    });
+    expect(patched).toMatchObject({ ok: true, data: { replacements: 1 } });
+    await expect(stub.readVaultFile({ path: 'notes/literal.md' })).resolves.toMatchObject({
+      ok: true,
+      data: { content: `before ${newText} after` },
     });
   });
 

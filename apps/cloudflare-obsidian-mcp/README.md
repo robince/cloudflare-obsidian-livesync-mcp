@@ -13,6 +13,11 @@ revision; creation is create-only. File listings include LiveSync's size,
 creation-time, and modification-time metadata when present. Attachment reads
 are base64 encoded and limited to 512,000 decoded bytes.
 
+`read_frontmatter` returns a JSON-compatible view of YAML. Explicit timestamps
+are normalized to ISO strings, binary scalars to base64 strings, and non-finite
+numbers to `.inf`, `-.inf`, or `.nan`. A `patch_frontmatter` request that makes
+no semantic change returns the existing revision without rewriting the note.
+
 ## Configure
 
 Set these non-secret Worker variables before deployment:

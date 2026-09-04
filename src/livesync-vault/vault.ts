@@ -274,9 +274,7 @@ export class LiveSyncVault {
       if (!parsed.data.replaceAll && replacements !== 1) {
         throw inputError('oldText must match exactly once unless replaceAll is true.');
       }
-      return parsed.data.replaceAll
-        ? content.split(parsed.data.oldText).join(parsed.data.newText)
-        : content.replace(parsed.data.oldText, parsed.data.newText);
+      return content.split(parsed.data.oldText).join(parsed.data.newText);
     });
     return result.ok ? success({ ...result.data, replacements }) : result;
   }
@@ -331,6 +329,7 @@ export class LiveSyncVault {
       if (!file) return failure('not_found', 'File not found.');
       if (file.revision !== expectedRevision) return failure('conflict', 'The file was modified by another client.');
       const content = transform(file.content);
+      if (content === file.content) return success({ path: existing.path, revision: file.revision });
       const size = utf8Bytes(content);
       if (size > VAULT_LIMITS.maxWriteBytes) return failure('too_large', 'File exceeds the write size limit.');
       const written = await commonlib.write(

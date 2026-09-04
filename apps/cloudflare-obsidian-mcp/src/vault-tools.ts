@@ -138,7 +138,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
   server.registerTool(
     'read_frontmatter',
     {
-      description: 'Read parsed YAML frontmatter from one Markdown file without returning its body.',
+      description: 'Read a JSON-compatible view of YAML frontmatter without returning the note body. YAML timestamps, binary values, and non-finite numbers are returned as strings.',
       inputSchema: readFrontmatterInput,
       outputSchema: z.object({ path: z.string(), revision: z.string(), frontmatter: frontmatterSchema }),
     },
