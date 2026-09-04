@@ -21,6 +21,7 @@ import type { VaultRpc } from './vault-rpc';
 
 export const READ_SCOPE = 'vault:read';
 export const WRITE_SCOPE = 'vault:write';
+const EXACT_TEXT_NOTE = ' Text fields are literal: enter actual line breaks; typing \\n in a form normally writes a backslash and n.';
 
 export function accessTokenScopes(props: { scopes?: unknown } | undefined, requestedScope: unknown): string[] {
   const granted = Array.isArray(props?.scopes) ? props.scopes.filter((scope) => scope === READ_SCOPE || scope === WRITE_SCOPE) : [];
@@ -146,7 +147,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
   server.registerTool(
     'read_file',
     {
-      description: 'Read one Markdown file from the configured vault.',
+      description: 'Read one Markdown file from the configured vault. JSON views may display actual line breaks as escaped \\n sequences; the returned string contains real line breaks.',
       inputSchema: readFileInput,
       outputSchema: z.object({ path: z.string(), revision: z.string(), content: z.string() }),
     },
@@ -202,7 +203,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'create_file',
       {
-        description: 'Create a new Markdown file in the configured vault. On revision_conflict or conflict_reconciled, reread and reassess. On livesync_conflict, tell the user to resolve in Obsidian and sync first.',
+        description: `Create a new Markdown file in the configured vault.${EXACT_TEXT_NOTE} On revision_conflict or conflict_reconciled, reread and reassess. On livesync_conflict, tell the user to resolve in Obsidian and sync first.`,
         inputSchema: createFileInput,
         outputSchema: writeResult,
       },
@@ -211,7 +212,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'edit_file',
       {
-        description: 'Replace the contents of an existing Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
+        description: `Replace the contents of an existing Markdown file.${EXACT_TEXT_NOTE} Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.`,
         inputSchema: editFileInput,
         outputSchema: writeResult,
       },
@@ -220,7 +221,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'append_file',
       {
-        description: 'Append text exactly to an existing Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
+        description: `Append text exactly to an existing Markdown file.${EXACT_TEXT_NOTE} Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.`,
         inputSchema: appendFileInput,
         outputSchema: writeResult,
       },
@@ -229,7 +230,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'patch_file',
       {
-        description: 'Replace exact text in an existing Markdown file. The match must be unique unless replaceAll is true. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
+        description: `Replace exact text in an existing Markdown file.${EXACT_TEXT_NOTE} The match must be unique unless replaceAll is true. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.`,
         inputSchema: patchFileInput,
         outputSchema: writeResult.extend({ replacements: z.number().int().positive() }),
       },

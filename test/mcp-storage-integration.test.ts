@@ -93,6 +93,8 @@ describe('MCP to storage Durable Object integration', () => {
       type: 'object',
       additionalProperties: expect.objectContaining({ $ref: expect.any(String) }),
     });
+    expect(tools.tools.find((tool) => tool.name === 'read_file')?.description).toContain('escaped \\n');
+    expect(tools.tools.find((tool) => tool.name === 'append_file')?.description).toContain('typing \\n');
     await expect(client.callTool({ name: 'vault_status', arguments: {} })).resolves.toMatchObject({
       structuredContent: { compatible: true },
     });
