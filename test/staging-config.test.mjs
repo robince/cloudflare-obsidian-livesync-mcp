@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stagingConfig } from '../scripts/staging/config.mjs';
+import { stagingConfig, stagingWorkerOrigin } from '../scripts/staging/config.mjs';
 const env = {
   STAGING_LIVESYNC_ROOT: '/tmp/pinned', STAGING_COUCH_URL: 'https://storage.example',
   STAGING_COUCH_USER: 'test', STAGING_COUCH_PASSWORD: 'test',
@@ -18,4 +18,25 @@ test('rejects insecure credential transport and shared Obsidian profiles', () =>
   }
   assert.throws(() => stagingConfig({ ...env, E2E_OBSIDIAN_USE_USER_DATA_DIR: 'false' }));
   assert.throws(() => stagingConfig({ ...env, E2E_OBSIDIAN_ARGS: '--user-data-dir=/normal' }));
+});
+test('accepts only the exact generated Worker origin on the expected account subdomain', () => {
+  assert.equal(
+    stagingWorkerOrigin(
+      'https://livesync-conflict-mcp-01234567.cloudflare-723.workers.dev',
+      'livesync-conflict-mcp-01234567',
+      'cloudflare-723',
+    ),
+    'https://livesync-conflict-mcp-01234567.cloudflare-723.workers.dev',
+  );
+  for (const origin of [
+    'https://livesync-conflict-mcp-01234567.attacker.example',
+    'https://livesync-conflict-mcp-01234567.attacker.workers.dev',
+    'https://livesync-conflict-mcp-01234567.cloudflare-723.workers.dev/path',
+  ]) {
+    assert.throws(() => stagingWorkerOrigin(
+      origin,
+      'livesync-conflict-mcp-01234567',
+      'cloudflare-723',
+    ));
+  }
 });

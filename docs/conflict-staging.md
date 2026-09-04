@@ -18,8 +18,9 @@ npx wrangler secret bulk .wrangler/conflict-staging/storage-secrets.json --confi
 ```
 
 Set the generated MCP origin with `node scripts/staging/prepare.mjs --origin
-<actual-staging-https-origin>`, using the generated MCP Worker name and the
-account's verified workers.dev subdomain. Deploy MCP with
+<actual-staging-https-origin> <workers-dev-account-subdomain>`, using the
+generated MCP Worker name and the account's verified workers.dev subdomain.
+Deploy MCP with
 `npx wrangler deploy --config .wrangler/conflict-staging/mcp.json`. Its binding
 targets only the generated storage Worker. Wrangler provisions a dedicated
 OAuth KV namespace; retain its generated ID in the ignored configuration.

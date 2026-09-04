@@ -5,6 +5,21 @@ export const REQUIRED = [
   'STAGING_MCP_WRITE_TOKEN', 'STAGING_MCP_READ_TOKEN',
 ];
 
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+export function stagingWorkerOrigin(value, workerName, workersDevSubdomain) {
+  if (!DNS_LABEL.test(workerName) || !DNS_LABEL.test(workersDevSubdomain)) {
+    throw new Error('Expected valid staging Worker and workers.dev account names.');
+  }
+  const url = new URL(value);
+  const expectedHostname = `${workerName}.${workersDevSubdomain}.workers.dev`;
+  if (url.protocol !== 'https:' || url.hostname !== expectedHostname
+    || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+    throw new Error(`Expected the exact staging Worker origin https://${expectedHostname}`);
+  }
+  return url.origin;
+}
+
 export function stagingConfig(env) {
   const missing = REQUIRED.filter(key => !env[key]);
   if (missing.length) throw new Error(`Missing staging configuration: ${missing.join(', ')}`);

@@ -8,7 +8,10 @@ const secrets = JSON.parse(await readFile(join(directory, 'storage-secrets.json'
 const mode = process.argv[2] ?? '--check';
 const tokens = await readFile(join(directory, 'tokens.json'), 'utf8').then(JSON.parse).catch(error => {
   if (error.code === 'ENOENT' && mode === '--check') return { read: 'not-checked', write: 'not-checked' };
-  throw new Error('Staging OAuth tokens are required. Run the staging authorization helper.');
+  if (error.code === 'ENOENT') {
+    throw new Error('Staging OAuth tokens are required. Run the staging authorization helper.', { cause: error });
+  }
+  throw error;
 });
 const root = process.env.STAGING_LIVESYNC_ROOT;
 if (!root) throw new Error('Set STAGING_LIVESYNC_ROOT to the built, pinned worktree.');
@@ -26,5 +29,9 @@ const child = spawn(process.execPath, ['--import', join(root, 'node_modules/tsx/
     STAGING_MCP_WRITE_TOKEN: tokens.write ?? tokens.read,
     STAGING_CONFIRM_DISPOSABLE: 'yes',
   },
+});
+child.on('error', error => {
+  console.error(`Failed to start the staging conflict runner: ${error.message}`);
+  process.exitCode = 1;
 });
 child.on('exit', code => { process.exitCode = code ?? 1; });

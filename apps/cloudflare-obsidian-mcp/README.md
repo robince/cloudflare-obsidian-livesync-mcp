@@ -86,7 +86,7 @@ npm run dry-run --workspace @cloudflare-obsidian-livesync/mcp
 Tool registration, output schemas, and allowlist checks are covered by the MCP
 workspace tests. The workerd suite runs the MCP Worker and a Wrangler-built
 storage Worker together: after a real DCR, PKCE, consent, callback, and token
-exchange flow, authenticated read-tool calls
-requests cross the configured external Durable Object binding. It also covers
+exchange flow, authenticated read-tool calls cross the configured external
+Durable Object binding. It also covers
 callback replay protection, CSRF rejection, and allowlist denial. Interactive
 OAuth with GitHub and a disposable vault remains a staging checkpoint.

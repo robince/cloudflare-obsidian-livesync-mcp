@@ -2,17 +2,15 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { stagingWorkerOrigin } from './config.mjs';
 const root = resolve(import.meta.dirname, '../..');
 const directory = join(root, '.wrangler/conflict-staging');
 await mkdir(directory, { recursive: true, mode: 0o700 });
 const statePath = join(directory, 'runtime.json');
 if (process.argv[2] === '--origin') {
-  const url = new URL(process.argv[3]);
-  if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw new Error('Expected HTTPS origin');
   const configPath = join(directory, 'mcp.json');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
-  if (!url.hostname.startsWith(`${config.name}.`)) throw new Error('Origin must belong to the generated staging Worker');
-  config.vars.MCP_PUBLIC_BASE_URL = url.origin;
+  config.vars.MCP_PUBLIC_BASE_URL = stagingWorkerOrigin(process.argv[3], config.name, process.argv[4]);
   await writeFile(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
 } else {
   const suffix = randomBytes(6).toString('hex');
