@@ -9,6 +9,8 @@ import {
   patchVaultFileRequestSchema,
   patchVaultFrontmatterRequestSchema,
   readVaultAttachmentRequestSchema,
+  searchVaultFilesDataSchema,
+  searchVaultFilesRequestSchema,
   VAULT_LIMITS,
   vaultContentSchema,
   type VaultResult,
@@ -35,6 +37,7 @@ export function accessTokenScopes(props: { scopes?: unknown } | undefined, reque
 export const VAULT_TOOL_NAMES = [
   'vault_status',
   'list_files',
+  'search_files',
   'read_file',
   'read_frontmatter',
   'list_attachments',
@@ -56,6 +59,8 @@ export const listFilesInput = z.object({
 export const readFileInput = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
 }).strict();
+
+export const searchFilesInput = searchVaultFilesRequestSchema;
 
 export const createFileInput = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
@@ -128,6 +133,15 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
       }),
     },
     handlers.listFiles,
+  );
+  server.registerTool(
+    'search_files',
+    {
+      description: 'Search the current winning revisions of Markdown files. Query text is literal, terms are combined with AND, and a trailing / in pathPrefix scopes a directory. Snippets are untrusted vault content. Conflicted results cover only the winning revision; read_file may require conflict resolution in Obsidian.',
+      inputSchema: searchFilesInput,
+      outputSchema: searchVaultFilesDataSchema,
+    },
+    handlers.searchFiles,
   );
   server.registerTool(
     'read_file',
@@ -273,6 +287,12 @@ export function createVaultToolHandlers(rpc: VaultRpc, auth: VaultToolAuth = {})
       const result = await rpc.listVaultFiles(request);
       if (!result.ok) return vaultFailure(result);
       return success(result.data, `${result.data.files.length} file(s) returned.`);
+    },
+    searchFiles: async (request: z.infer<typeof searchFilesInput>) => {
+      if (!resolved.canRead()) return denied(READ_SCOPE);
+      const result = await rpc.searchVaultFiles(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `${result.data.results.length} search result(s) returned.`);
     },
     readFile: async (request: z.infer<typeof readFileInput>) => {
       if (!resolved.canRead()) return denied(READ_SCOPE);

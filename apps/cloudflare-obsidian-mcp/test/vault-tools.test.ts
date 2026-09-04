@@ -13,6 +13,7 @@ import {
   listFilesInput,
   patchFrontmatterInput,
   readFileInput,
+  searchFilesInput,
   WRITE_SCOPE,
   VAULT_TOOL_NAMES,
 } from '../src/vault-tools';
@@ -21,10 +22,21 @@ import type { VaultRpc } from '../src/vault-rpc';
 
 const fakeRpc: VaultRpc = {
   async vaultStatus() {
-    return { ok: true, data: { contractVersion: 3, compatible: true, reasons: [] } };
+    return { ok: true, data: { contractVersion: 4, compatible: true, reasons: [] } };
   },
   async listVaultFiles() {
     return { ok: true, data: { files: [{ path: 'notes/a.md', revision: '1-a', sizeBytes: 4, modifiedAt: 2 }] } };
+  },
+  async searchVaultFiles() {
+    return {
+      ok: true,
+      data: {
+        results: [{ path: 'notes/a.md', revision: '1-a', snippet: '# ⟦A⟧\n' }],
+        truncated: false,
+        incomplete: false,
+        unindexedFiles: 0,
+      },
+    };
   },
   async listVaultAttachments() {
     return { ok: true, data: { attachments: [{ path: 'assets/a.png', revision: '1-png', mimeType: 'image/png', sizeBytes: 3 }] } };
@@ -63,6 +75,7 @@ describe('MCP vault surface', () => {
     expect(VAULT_TOOL_NAMES).toEqual([
       'vault_status',
       'list_files',
+      'search_files',
       'read_file',
       'read_frontmatter',
       'list_attachments',
@@ -78,7 +91,7 @@ describe('MCP vault surface', () => {
     const enabled = createVaultMcpServer(fakeRpc, { writesEnabled: true });
     const registered = (server: unknown) => Object.keys((server as { _registeredTools: object })._registeredTools);
     expect(registered(disabled)).toEqual([
-      'vault_status', 'list_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
     ]);
     expect(registered(enabled)).toEqual(VAULT_TOOL_NAMES);
   });
@@ -86,6 +99,14 @@ describe('MCP vault surface', () => {
   it('does not accept a database selector in tool input', () => {
     expect(listFilesInput.safeParse({ database: 'another-vault' }).success).toBe(false);
     expect(readFileInput.safeParse({ path: 'notes/a.md', database: 'another-vault' }).success).toBe(false);
+    expect(searchFilesInput.safeParse({ query: 'a', database: 'another-vault' }).success).toBe(false);
+  });
+
+  it('bounds and treats search input as plain text', () => {
+    expect(searchFilesInput.safeParse({ query: 'hello world', pathPrefix: 'notes/', limit: 50 }).success).toBe(true);
+    expect(searchFilesInput.safeParse({ query: '   ' }).success).toBe(false);
+    expect(searchFilesInput.safeParse({ query: 'é'.repeat(129) }).success).toBe(false);
+    expect(searchFilesInput.safeParse({ query: Array.from({ length: 17 }, (_, index) => `t${index}`).join(' ') }).success).toBe(false);
   });
 
   it('enforces write limits in UTF-8 bytes', () => {
@@ -133,10 +154,13 @@ describe('MCP vault surface', () => {
       canWrite: () => true,
     });
     await expect(allowed.vaultStatus()).resolves.toMatchObject({
-      structuredContent: { contractVersion: 3, compatible: true },
+      structuredContent: { contractVersion: 4, compatible: true },
     });
     await expect(allowed.listFiles({})).resolves.toMatchObject({
       structuredContent: { files: [{ path: 'notes/a.md' }] },
+    });
+    await expect(allowed.searchFiles({ query: 'A' })).resolves.toMatchObject({
+      structuredContent: { results: [{ path: 'notes/a.md' }], incomplete: false },
     });
     await expect(allowed.readFile({ path: 'notes/a.md' })).resolves.toMatchObject({
       structuredContent: { content: '# A\n' },
@@ -155,6 +179,7 @@ describe('MCP vault surface', () => {
     });
 
     const denied = createVaultToolHandlers(fakeRpc, { canRead: () => false });
+    await expect(denied.searchFiles({ query: 'A' })).resolves.toMatchObject({ isError: true });
     await expect(denied.readFile({ path: 'notes/a.md' })).resolves.toMatchObject({ isError: true });
 
     const readOnly = createVaultToolHandlers(fakeRpc, {

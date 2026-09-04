@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** Incremented whenever the semantic vault RPC wire contract changes. */
-export const CONTRACT_VERSION = 3 as const;
+export const CONTRACT_VERSION = 4 as const;
 
 export const VAULT_LIMITS = {
   maxListLimit: 100,
@@ -17,6 +17,12 @@ export const VAULT_LIMITS = {
   maxPathLength: 1024,
   maxCursorLength: 2048,
   maxRevisionLength: 256,
+  maxSearchQueryBytes: 256,
+  maxSearchTerms: 16,
+  defaultSearchLimit: 20,
+  maxSearchLimit: 50,
+  maxSearchSnippetBytes: 1024,
+  maxSearchResponseBytes: 128 * 1024,
 } as const;
 
 export const vaultErrorCodeSchema = z.enum([
@@ -93,6 +99,31 @@ export const listVaultFilesDataSchema = z.object({
   cursor: z.string().optional(),
 });
 export type ListVaultFilesData = z.infer<typeof listVaultFilesDataSchema>;
+
+export const searchVaultFilesRequestSchema = z.object({
+  query: z.string().refine(
+    (query) => query.trim().length > 0
+      && new TextEncoder().encode(query).byteLength <= VAULT_LIMITS.maxSearchQueryBytes
+      && query.trim().split(/\s+/u).length <= VAULT_LIMITS.maxSearchTerms,
+    { message: `Query must contain 1-${VAULT_LIMITS.maxSearchTerms} terms and not exceed ${VAULT_LIMITS.maxSearchQueryBytes} UTF-8 bytes.` },
+  ),
+  pathPrefix: z.string().max(VAULT_LIMITS.maxPathLength).optional(),
+  limit: z.number().int().positive().max(VAULT_LIMITS.maxSearchLimit).optional(),
+}).strict();
+export type SearchVaultFilesRequest = z.infer<typeof searchVaultFilesRequestSchema>;
+
+export const searchVaultFilesDataSchema = z.object({
+  results: z.array(z.object({
+    path: z.string(),
+    revision: z.string(),
+    snippet: z.string(),
+    unresolvedVersions: z.number().int().min(2).optional(),
+  })),
+  truncated: z.boolean(),
+  incomplete: z.boolean(),
+  unindexedFiles: z.number().int().nonnegative(),
+});
+export type SearchVaultFilesData = z.infer<typeof searchVaultFilesDataSchema>;
 
 export const readVaultFileRequestSchema = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),

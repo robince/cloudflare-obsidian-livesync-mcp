@@ -40,6 +40,11 @@ describe('MCP to storage Durable Object integration', () => {
           code: 'livesync_conflict', path, unresolvedVersions: 2, resolution: 'obsidian',
         } },
       });
+      expect(await client.callTool({ name: 'search_files', arguments: { query: 'base' } })).toMatchObject({
+        structuredContent: {
+          results: [expect.objectContaining({ path, unresolvedVersions: 2 })],
+        },
+      });
       const write = await client.callTool({ name: 'append_file', arguments: { path, expectedRevision: '2-b', content: 'NEVER' } });
       expect(write.isError).toBe(true);
       if (!writable) expect(await tree()).toEqual(before);
@@ -74,7 +79,7 @@ describe('MCP to storage Durable Object integration', () => {
 
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual([
-      'vault_status', 'list_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
       'create_file', 'edit_file', 'append_file', 'patch_file', 'patch_frontmatter', 'delete_file',
     ]);
     await expect(client.callTool({ name: 'vault_status', arguments: {} })).resolves.toMatchObject({
@@ -85,6 +90,12 @@ describe('MCP to storage Durable Object integration', () => {
         files: expect.arrayContaining([
           expect.objectContaining({ path: 'notes/unicode-雪.md' }),
         ]),
+      },
+    });
+    await expect(client.callTool({ name: 'search_files', arguments: { query: 'naive', pathPrefix: 'notes/' } })).resolves.toMatchObject({
+      structuredContent: {
+        results: expect.arrayContaining([expect.objectContaining({ path: 'notes/unicode-雪.md' })]),
+        incomplete: false,
       },
     });
     await expect(client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md' } })).resolves.toMatchObject({
@@ -160,7 +171,7 @@ describe('MCP to storage Durable Object integration', () => {
     closeables.push(client, server);
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
-      'vault_status', 'list_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
     ]);
   });
 });

@@ -16,6 +16,8 @@ import type {
   ReadVaultFileRequest,
   ReadVaultFrontmatterData,
   ReadVaultFrontmatterRequest,
+  SearchVaultFilesData,
+  SearchVaultFilesRequest,
   UpdateVaultFileRequest,
   VaultResult,
   VaultStatusData,
@@ -38,6 +40,7 @@ export function isVaultDatabaseName(value: unknown): value is string {
 export interface VaultRpc {
   vaultStatus(): Promise<VaultResult<VaultStatusData>>;
   listVaultFiles(request: ListVaultFilesRequest): Promise<VaultResult<ListVaultFilesData>>;
+  searchVaultFiles(request: SearchVaultFilesRequest): Promise<VaultResult<SearchVaultFilesData>>;
   listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>>;
   readVaultFile(request: ReadVaultFileRequest): Promise<VaultResult<ReadVaultFileData>>;
   readVaultAttachment(request: ReadVaultAttachmentRequest): Promise<VaultResult<ReadVaultAttachmentData>>;
@@ -58,6 +61,7 @@ function unavailableRpc(): VaultRpc {
   return {
     vaultStatus: async () => invalid,
     listVaultFiles: async () => invalid,
+    searchVaultFiles: async () => invalid,
     listVaultAttachments: async () => invalid,
     readVaultFile: async () => invalid,
     readVaultAttachment: async () => invalid,

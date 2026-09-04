@@ -19,6 +19,8 @@ import type {
   ReadVaultFileData,
   ReadVaultFrontmatterData,
   ReadVaultFrontmatterRequest,
+  SearchVaultFilesData,
+  SearchVaultFilesRequest,
   UpdateVaultFileRequest,
   VaultResult,
   VaultStatusData,
@@ -37,6 +39,7 @@ import {
 import type { DatabaseInfo, JsonObject } from './types';
 import type { CommonlibFacade } from './livesync-vault/commonlib';
 import { LiveSyncVault } from './livesync-vault/vault';
+import { LiveSyncSearch } from './livesync-vault/search';
 
 PouchDB.plugin(cloudflareDOAdapter);
 
@@ -47,6 +50,7 @@ const MAX_ATTACHMENT_BYTES = 900_000;
 
 type AnyDatabase = PouchDB.Database<JsonObject> & {
   bulkGet(options: JsonObject): Promise<JsonObject>;
+  id(): Promise<string>;
   purge(id: string, rev: string): Promise<JsonObject>;
 };
 
@@ -67,6 +71,7 @@ export class PouchDatabase extends DurableObject<Env> {
   private db?: AnyDatabase;
   private dbName?: string;
   private activeChangeLongpolls = 0;
+  private searchLifecycle = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -155,6 +160,10 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.vault().list(request);
   }
 
+  async searchVaultFiles(request: SearchVaultFilesRequest): Promise<VaultResult<SearchVaultFilesData>> {
+    return this.withSearchLifecycle(() => this.search().search(request));
+  }
+
   async listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>> {
     return this.vault().listAttachments(request);
   }
@@ -210,6 +219,35 @@ export class PouchDatabase extends DurableObject<Env> {
       acquireCommonlib: (profile) => this.createCommonlib(profile),
       releaseCommonlib: (commonlib) => commonlib.close(),
     });
+  }
+
+  private search(): LiveSyncSearch {
+    return new LiveSyncSearch({
+      storage: this.ctx.storage,
+      database: () => {
+        this.requireExists();
+        return this.database();
+      },
+      profile: async () => {
+        this.requireExists();
+        return this.inspectCommonlibProfile();
+      },
+      acquireCommonlib: (profile) => this.createCommonlib(profile),
+      releaseCommonlib: (commonlib) => commonlib.close(),
+    });
+  }
+
+  private async withSearchLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    // ponytail: one per-vault queue is enough; split it only if concurrent search/purge throughput matters.
+    const previous = this.searchLifecycle;
+    let release!: () => void;
+    this.searchLifecycle = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   private async createCommonlib(profile: VaultProfileInspection): Promise<CommonlibFacade> {
@@ -463,12 +501,17 @@ export class PouchDatabase extends DurableObject<Env> {
 
   private async purgeRoute(request: Request, db: AnyDatabase): Promise<Response> {
     const requested = await readJson<Record<string, string[]>>(request);
-    const purged: Record<string, string[]> = {};
-    for (const [id, revisions] of Object.entries(requested)) {
-      for (const revision of revisions) await db.purge(id, revision);
-      purged[id] = revisions;
-    }
-    return json({ purge_seq: null, purged });
+    return this.withSearchLifecycle(async () => {
+      // Purge has no _changes entry. Invalidate first so a partial purge failure
+      // can only cause harmless replay, never a permanently stale search row.
+      this.search().invalidatePurgedDocuments(Object.keys(requested));
+      const purged: Record<string, string[]> = {};
+      for (const [id, revisions] of Object.entries(requested)) {
+        for (const revision of revisions) await db.purge(id, revision);
+        purged[id] = revisions;
+      }
+      return json({ purge_seq: null, purged });
+    });
   }
 
   private async viewRoute(request: Request, parts: string[], db: AnyDatabase): Promise<Response> {

@@ -2,7 +2,7 @@
 
 This Worker exposes authenticated tools for one configured vault:
 
-- read tools: `vault_status`, `list_files`, `read_file`, `read_frontmatter`,
+- read tools: `vault_status`, `list_files`, `search_files`, `read_file`, `read_frontmatter`,
   `list_attachments`, and `read_attachment`;
 - write tools: `create_file`, `edit_file`, `append_file`, `patch_file`,
   `patch_frontmatter`, and `delete_file`.
@@ -21,6 +21,16 @@ no semantic change returns the existing revision without rewriting the note.
 Frontmatter input is bounded to 512,000 encoded bytes, 32 nested levels, and
 10,000 JSON values before YAML serialization.
 
+`search_files` searches path, filename-derived title, and the current winning
+Markdown revision (including raw YAML frontmatter) using a private derived
+FTS5 index. Plain query terms are combined with AND and ranked with BM25;
+FTS syntax, fuzzy matching, and prefix-word matching are not exposed. The index
+uses a three-second catch-up budget checked between documents, then asks the
+caller to retry rather than return stale results. Files over 512,000 bytes,
+files with more than 1,024 chunks, and permanently unreadable winners are
+excluded and reported through the vault-wide `incomplete` and `unindexedFiles`
+coverage fields. Search snippets are untrusted vault content.
+
 ## Conflict feedback
 
 Tool errors have `isError: true`, readable text, and
@@ -37,7 +47,7 @@ attachment listings include `unresolvedVersions` when multiple live versions
 exist. Automatic reconciliation runs only behind write authorization and the
 write kill switch. Binary conflicts are left to Obsidian's own policy.
 
-The semantic contract is version 3; deploy storage before the matching MCP
+The semantic contract is version 4; deploy storage before the matching MCP
 Worker. This does not change the CouchDB replication protocol.
 
 ## Deployment configuration
