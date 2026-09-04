@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { allowedGithubLogins, normalizeGithubLogin } from '../src/auth-utils';
 import {
   accessTokenScopes,
+  appendFileInput,
   createVaultMcpServer,
   createVaultToolHandlers,
   createFileInput,
   hasReadScope,
   hasVaultAccess,
   listFilesInput,
+  patchFrontmatterInput,
   readFileInput,
   WRITE_SCOPE,
   VAULT_TOOL_NAMES,
@@ -18,19 +20,37 @@ import type { VaultRpc } from '../src/vault-rpc';
 
 const fakeRpc: VaultRpc = {
   async vaultStatus() {
-    return { ok: true, data: { contractVersion: 1, compatible: true, reasons: [] } };
+    return { ok: true, data: { contractVersion: 2, compatible: true, reasons: [] } };
   },
   async listVaultFiles() {
-    return { ok: true, data: { files: [{ path: 'notes/a.md', revision: '1-a' }] } };
+    return { ok: true, data: { files: [{ path: 'notes/a.md', revision: '1-a', sizeBytes: 4, modifiedAt: 2 }] } };
+  },
+  async listVaultAttachments() {
+    return { ok: true, data: { attachments: [{ path: 'assets/a.png', revision: '1-png', mimeType: 'image/png', sizeBytes: 3 }] } };
   },
   async readVaultFile({ path }) {
     return { ok: true, data: { path, revision: '1-a', content: '# A\n' } };
+  },
+  async readVaultAttachment({ path }) {
+    return { ok: true, data: { path, revision: '1-png', mimeType: 'image/png', sizeBytes: 3, contentBase64: 'AQID' } };
+  },
+  async readVaultFrontmatter({ path }) {
+    return { ok: true, data: { path, revision: '1-a', frontmatter: { tags: ['test'] } } };
   },
   async createVaultFile({ path }) {
     return { ok: true, data: { path, revision: '1-new' } };
   },
   async updateVaultFile({ path }) {
     return { ok: true, data: { path, revision: '2-edit' } };
+  },
+  async appendVaultFile({ path }) {
+    return { ok: true, data: { path, revision: '2-append' } };
+  },
+  async patchVaultFile({ path }) {
+    return { ok: true, data: { path, revision: '2-patch', replacements: 1 } };
+  },
+  async patchVaultFrontmatter({ path }) {
+    return { ok: true, data: { path, revision: '2-frontmatter', updated: ['status'], removed: [] } };
   },
   async deleteVaultFile({ path }) {
     return { ok: true, data: { path, revision: '2-del' } };
@@ -43,14 +63,22 @@ describe('MCP vault surface', () => {
       'vault_status',
       'list_files',
       'read_file',
+      'read_frontmatter',
+      'list_attachments',
+      'read_attachment',
       'create_file',
       'edit_file',
+      'append_file',
+      'patch_file',
+      'patch_frontmatter',
       'delete_file',
     ]);
     const disabled = createVaultMcpServer(fakeRpc, { writesEnabled: false });
     const enabled = createVaultMcpServer(fakeRpc, { writesEnabled: true });
     const registered = (server: unknown) => Object.keys((server as { _registeredTools: object })._registeredTools);
-    expect(registered(disabled)).toEqual(['vault_status', 'list_files', 'read_file']);
+    expect(registered(disabled)).toEqual([
+      'vault_status', 'list_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
+    ]);
     expect(registered(enabled)).toEqual(VAULT_TOOL_NAMES);
   });
 
@@ -63,6 +91,12 @@ describe('MCP vault surface', () => {
     expect(createFileInput.safeParse({
       path: 'notes/large.md',
       content: 'é'.repeat(256_001),
+    }).success).toBe(false);
+    expect(appendFileInput.safeParse({
+      path: 'notes/a.md', content: '', expectedRevision: '1-a',
+    }).success).toBe(false);
+    expect(patchFrontmatterInput.safeParse({
+      path: 'notes/a.md', updates: {}, expectedRevision: '1-a',
     }).success).toBe(false);
   });
 
@@ -80,13 +114,22 @@ describe('MCP vault surface', () => {
       canWrite: () => true,
     });
     await expect(allowed.vaultStatus()).resolves.toMatchObject({
-      structuredContent: { contractVersion: 1, compatible: true },
+      structuredContent: { contractVersion: 2, compatible: true },
     });
     await expect(allowed.listFiles({})).resolves.toMatchObject({
       structuredContent: { files: [{ path: 'notes/a.md' }] },
     });
     await expect(allowed.readFile({ path: 'notes/a.md' })).resolves.toMatchObject({
       structuredContent: { content: '# A\n' },
+    });
+    await expect(allowed.readFrontmatter({ path: 'notes/a.md' })).resolves.toMatchObject({
+      structuredContent: { frontmatter: { tags: ['test'] } },
+    });
+    await expect(allowed.listAttachments({})).resolves.toMatchObject({
+      structuredContent: { attachments: [{ path: 'assets/a.png' }] },
+    });
+    await expect(allowed.readAttachment({ path: 'assets/a.png' })).resolves.toMatchObject({
+      structuredContent: { contentBase64: 'AQID' },
     });
     await expect(allowed.createFile({ path: 'notes/b.md', content: '# B\n' })).resolves.toMatchObject({
       structuredContent: { path: 'notes/b.md', revision: '1-new' },
@@ -102,6 +145,9 @@ describe('MCP vault surface', () => {
     });
     await expect(readOnly.createFile({ path: 'notes/b.md', content: '# B\n' })).resolves.toMatchObject({ isError: true });
     await expect(readOnly.editFile({ path: 'notes/a.md', content: '# A\n', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
+    await expect(readOnly.appendFile({ path: 'notes/a.md', content: 'x', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
+    await expect(readOnly.patchFile({ path: 'notes/a.md', oldText: 'A', newText: 'B', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
+    await expect(readOnly.patchFrontmatter({ path: 'notes/a.md', updates: {}, expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
     await expect(readOnly.deleteFile({ path: 'notes/a.md', expectedRevision: '1-a' })).resolves.toMatchObject({ isError: true });
 
     const disabled = createVaultToolHandlers(fakeRpc, {

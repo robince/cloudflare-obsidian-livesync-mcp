@@ -33,7 +33,8 @@
     "pouchdb-adapter-sqlite-core": "npm:@robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0",
     "pouchdb-core": "^9.0.0",
     "pouchdb-replication": "^9.0.0",
-    "xxhash-wasm-102": "npm:xxhash-wasm@1.1.0"
+    "xxhash-wasm-102": "npm:xxhash-wasm@1.1.0",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.0",

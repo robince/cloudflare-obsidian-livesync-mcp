@@ -2,6 +2,7 @@ import {
   DirectFileManipulator,
   type DirectFileManipulatorOptions,
 } from '@vrtmrz/livesync-commonlib';
+import { decodeBinary } from '@vrtmrz/livesync-commonlib/compat/string_and_binary/convert';
 
 import { IN_PROCESS_COUCH_ORIGIN } from './in-process-couch-fetch';
 import type { VaultProfileInspection } from './profile';
@@ -26,6 +27,7 @@ type RawNote = {
   eden?: unknown;
   size?: unknown;
   ctime?: unknown;
+  mtime?: unknown;
 };
 
 export interface CommonlibFile {
@@ -40,6 +42,12 @@ export interface CommonlibFileMetadata {
   datatype: string;
   size?: number;
   ctime?: number;
+  mtime?: number;
+}
+
+export interface CommonlibBinaryFile {
+  content: Uint8Array;
+  revision: string;
 }
 
 export class CommonlibFacade {
@@ -92,6 +100,7 @@ export class CommonlibFacade {
       datatype: noteDatatype(entry),
       size: typeof entry.size === 'number' ? entry.size : undefined,
       ctime: typeof entry.ctime === 'number' ? entry.ctime : undefined,
+      mtime: typeof entry.mtime === 'number' ? entry.mtime : undefined,
     };
   }
 
@@ -121,6 +130,39 @@ export class CommonlibFacade {
       pieces.push(piece);
     }
     return { content: pieces.join(''), revision: entry._rev };
+  }
+
+  async readBinary(path: string, maxBytes: number): Promise<CommonlibBinaryFile | false> {
+    await this.ready();
+    const entry = await this.rawNote(path);
+    if (!entry) return false;
+    if (noteDatatype(entry) !== 'newnote') {
+      throw Object.assign(new Error('unsupported LiveSync attachment type'), { code: 'unsupported' });
+    }
+    const children = entry.children;
+    if (!Array.isArray(children) || !children.every((id) => typeof id === 'string')) {
+      throw Object.assign(new Error('unsupported LiveSync attachment format'), { code: 'unsupported' });
+    }
+
+    const pieces: Uint8Array[] = [];
+    let bytes = 0;
+    for (const childId of children) {
+      const encoded = inlineChunk(entry.eden, childId) ?? await this.rawChunk(childId);
+      if (encoded === false) return false;
+      const piece = new Uint8Array(decodeBinary(encoded));
+      bytes += piece.byteLength;
+      if (bytes > maxBytes) {
+        throw Object.assign(new Error('LiveSync attachment exceeds the read size limit'), { code: 'too_large' });
+      }
+      pieces.push(piece);
+    }
+    const content = new Uint8Array(bytes);
+    let offset = 0;
+    for (const piece of pieces) {
+      content.set(piece, offset);
+      offset += piece.byteLength;
+    }
+    return { content, revision: entry._rev };
   }
 
   async write(
@@ -247,6 +289,7 @@ function listedMetadata(entry: EnumeratedEntry): CommonlibFileMetadata | undefin
     datatype: noteDatatype(entry),
     size: typeof entry.size === 'number' ? entry.size : undefined,
     ctime: typeof entry.ctime === 'number' ? entry.ctime : undefined,
+    mtime: typeof entry.mtime === 'number' ? entry.mtime : undefined,
   };
 }
 

@@ -33,24 +33,37 @@ No historical LiveSync releases are in scope.
 - The MCP Worker owns OAuth, authorization, the write kill switch, and tool
   formatting. The storage Worker owns vault access and revision checks.
 
-## V1 surface
+## Current surface
 
 Supported tools:
 
 - `vault_status`
 - `list_files`
 - `read_file`
+- `read_frontmatter`
+- `list_attachments`
+- `read_attachment`
 - `create_file`
 - `edit_file`
+- `append_file`
+- `patch_file`
+- `patch_frontmatter`
 - `delete_file`
 
 Not supported:
 
-- move, rename, patch, or bulk mutations;
+- move, rename, or bulk mutations;
 - encryption or path obfuscation;
-- non-Markdown and binary notes;
-- search, indexing, or automatic chunk garbage collection;
+- attachment writes or attachments larger than the bounded MCP response;
+- search, FTS5 indexing, or automatic chunk garbage collection;
 - historical LiveSync versions.
+
+All derived Markdown writes require the exact LiveSync revision returned by a
+read. `append_file` appends the supplied text verbatim. `patch_file` performs an
+exact replacement and rejects ambiguous matches unless `replaceAll` is
+explicitly true. Frontmatter tools operate on top-level YAML keys while
+preserving the Markdown body. Listings expose LiveSync metadata without reading
+every file body.
 
 ## Completed checkpoints
 
@@ -97,6 +110,7 @@ in the write checkpoint below rather than removed or hidden.
 - workerd writes produce current LiveSync `xxhash64` chunk IDs and round-trip;
 - two concurrent creates: exactly one winner and no conflict branch;
 - two edits from one revision: exactly one winner;
+- two derived writes from one revision: exactly one winner;
 - delete/update race: exactly one winner;
 - stale edits and deletes return `conflict`;
 - writes are absent and denied when the kill switch is off;
@@ -107,8 +121,8 @@ in the write checkpoint below rather than removed or hidden.
 - authenticated status, list, and read calls run through the real MCP HTTP
   endpoint and a Wrangler-built storage Worker over the configured cross-script
   Durable Object binding;
-- one local MCP-to-storage integration covers status, list, read, create, edit,
-  and delete through the real Durable Object RPC boundary;
+- one local MCP-to-storage integration covers every advertised tool through
+  the real Durable Object RPC boundary;
 - existing CouchDB replication tests remain green.
 
 ### Gate

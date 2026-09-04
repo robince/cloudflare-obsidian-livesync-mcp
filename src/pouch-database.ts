@@ -2,12 +2,23 @@ import { DurableObject } from 'cloudflare:workers';
 import cloudflareDOAdapter from '@robince/pouchdb-adapter-cloudflare-do';
 import PouchDB from 'pouchdb-core';
 import type {
+  AppendVaultFileRequest,
   CreateVaultFileRequest,
   DeleteVaultFileRequest,
+  ListVaultAttachmentsData,
+  ListVaultAttachmentsRequest,
   ListVaultFilesRequest,
   ListVaultFilesData,
+  PatchVaultFileData,
+  PatchVaultFileRequest,
+  PatchVaultFrontmatterData,
+  PatchVaultFrontmatterRequest,
+  ReadVaultAttachmentData,
+  ReadVaultAttachmentRequest,
   ReadVaultFileRequest,
   ReadVaultFileData,
+  ReadVaultFrontmatterData,
+  ReadVaultFrontmatterRequest,
   UpdateVaultFileRequest,
   VaultResult,
   VaultStatusData,
@@ -144,8 +155,20 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.vault().list(request);
   }
 
+  async listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>> {
+    return this.vault().listAttachments(request);
+  }
+
   async readVaultFile(request: ReadVaultFileRequest): Promise<VaultResult<ReadVaultFileData>> {
     return this.vault().read(request);
+  }
+
+  async readVaultAttachment(request: ReadVaultAttachmentRequest): Promise<VaultResult<ReadVaultAttachmentData>> {
+    return this.vault().readAttachment(request);
+  }
+
+  async readVaultFrontmatter(request: ReadVaultFrontmatterRequest): Promise<VaultResult<ReadVaultFrontmatterData>> {
+    return this.vault().readFrontmatter(request);
   }
 
   async createVaultFile(request: CreateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
@@ -154,6 +177,18 @@ export class PouchDatabase extends DurableObject<Env> {
 
   async updateVaultFile(request: UpdateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
     return this.vault().update(request);
+  }
+
+  async appendVaultFile(request: AppendVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
+    return this.vault().append(request);
+  }
+
+  async patchVaultFile(request: PatchVaultFileRequest): Promise<VaultResult<PatchVaultFileData>> {
+    return this.vault().patch(request);
+  }
+
+  async patchVaultFrontmatter(request: PatchVaultFrontmatterRequest): Promise<VaultResult<PatchVaultFrontmatterData>> {
+    return this.vault().patchFrontmatter(request);
   }
 
   async deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
