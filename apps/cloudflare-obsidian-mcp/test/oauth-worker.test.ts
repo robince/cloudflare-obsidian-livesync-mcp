@@ -150,7 +150,8 @@ describe('OAuth Worker boundary', () => {
     expect(read.status).toBe(200);
     expect(await read.text()).toContain('list and read Markdown files');
     expect(read.headers.get('set-cookie')).toContain('__Host-obsidian-mcp-csrf=');
-    expect(read.headers.get('content-security-policy')).toContain("form-action 'self' https://github.com");
+    expect(read.headers.get('content-security-policy'))
+      .toContain("form-action 'self' https://github.com https://client.example");
 
     const write = await workerFetch(authorizeUrl(client.client_id, 'vault:read vault:write'));
     expect(write.status).toBe(400);

@@ -130,6 +130,7 @@ async function startAuthorization(request: Request, env: OAuthEnv): Promise<Resp
   return htmlResponse(
     consentPage(id, csrf, client.clientName ?? 'MCP client', authorization.scope),
     csrfCookie(csrf),
+    new URL(authorization.redirectUri).origin,
   );
 }
 
@@ -343,11 +344,11 @@ function consentPage(authorizationId: string, csrf: string, clientName: string, 
   return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>${escapeHtml(clientName)} requests access to ${access} in your configured vault.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
 }
 
-function htmlResponse(body: string, setCookie: string): Response {
+function htmlResponse(body: string, setCookie: string, clientOrigin: string): Response {
   return new Response(body, {
     headers: {
       'content-type': 'text/html; charset=utf-8',
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'",
+      'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://github.com ${clientOrigin}; base-uri 'none'; frame-ancestors 'none'`,
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
       'set-cookie': setCookie,
