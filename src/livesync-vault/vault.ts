@@ -12,6 +12,7 @@ import {
   readVaultFrontmatterRequestSchema,
   updateVaultFileRequestSchema,
   VAULT_LIMITS,
+  vaultErrorSchema,
   type AppendVaultFileRequest,
   type CreateVaultFileRequest,
   type DeleteVaultFileRequest,
@@ -39,6 +40,7 @@ import {
 import type { CommonlibFacade, CommonlibFileMetadata } from './commonlib';
 import { patchFrontmatter as applyFrontmatterPatch, readFrontmatter as parseFrontmatter } from './frontmatter';
 import type { VaultProfileInspection } from './profile';
+import { revisionConflict } from './conflicts';
 
 type VaultDependencies = {
   profile: () => Promise<VaultProfileInspection>;
@@ -81,17 +83,23 @@ export class LiveSyncVault {
     return this.withCommonlib(async (commonlib, profile) => {
       const page: CommonlibFileMetadata[] = [];
       let extra = false;
+      let examined = 0;
+      let lastId: string | undefined;
       for await (const file of commonlib.enumerate()) {
         if (!isListedMarkdown(file, prefix, profile.handleFilenameCaseSensitive)) continue;
         if (cursor && file.id <= cursor.id) continue;
-        if (page.length === limit) {
+        if (page.length === limit || examined === VAULT_LIMITS.maxListLimit) {
           extra = true;
           break;
         }
-        page.push(file);
+        const versions = await commonlib.conflictVersions(file.path);
+        examined++;
+        lastId = file.id;
+        if ((file.deleted || file.datatype !== 'plain') && versions < 2) continue;
+        page.push({ ...file, ...(versions > 1 ? { unresolvedVersions: versions } : {}) });
       }
-      const next = extra && page.length > 0
-        ? encodeCursor({ v: 1, prefix, id: page[page.length - 1].id })
+      const next = extra && lastId
+        ? encodeCursor({ v: 1, prefix, id: lastId })
         : undefined;
       return success({
         files: page.map(toPublicFile),
@@ -113,17 +121,23 @@ export class LiveSyncVault {
     return this.withCommonlib(async (commonlib, profile) => {
       const page: CommonlibFileMetadata[] = [];
       let extra = false;
+      let examined = 0;
+      let lastId: string | undefined;
       for await (const file of commonlib.enumerate()) {
         if (!isListedAttachment(file, prefix, profile.handleFilenameCaseSensitive)) continue;
         if (cursor && file.id <= cursor.id) continue;
-        if (page.length === limit) {
+        if (page.length === limit || examined === VAULT_LIMITS.maxListLimit) {
           extra = true;
           break;
         }
-        page.push(file);
+        const versions = await commonlib.conflictVersions(file.path);
+        examined++;
+        lastId = file.id;
+        if (file.deleted && versions < 2) continue;
+        page.push({ ...file, ...(versions > 1 ? { unresolvedVersions: versions } : {}) });
       }
-      const next = extra && page.length > 0
-        ? encodeCursor({ v: 1, prefix, id: page[page.length - 1].id })
+      const next = extra && lastId
+        ? encodeCursor({ v: 1, prefix, id: lastId })
         : undefined;
       return success({
         attachments: page.map((file) => ({ ...toPublicFile(file), mimeType: mimeType(file.path) })),
@@ -212,15 +226,16 @@ export class LiveSyncVault {
     if (contentError) return contentError;
 
     return this.withCommonlib(async (commonlib) => {
+      await commonlib.reconcileBeforeMutation(parsed.data.path);
       const existing = await commonlib.inspect(parsed.data.path);
-      if (existing) return failure('conflict', 'File already exists.');
+      if (existing) return { ok: false, error: revisionConflict(parsed.data.path) };
       const now = Date.now();
       const written = await commonlib.write(parsed.data.path, parsed.data.content, {
         ctime: now,
         mtime: now,
         size: utf8Bytes(parsed.data.content),
       });
-      if (!written) return failure('conflict', 'File already exists.');
+      if (!written) return { ok: false, error: revisionConflict(parsed.data.path) };
       return success({ path: parsed.data.path, revision: written.revision });
     });
   }
@@ -234,6 +249,7 @@ export class LiveSyncVault {
     if (contentError) return contentError;
 
     return this.withCommonlib(async (commonlib) => {
+      await commonlib.reconcileBeforeMutation(parsed.data.path);
       const existing = await commonlib.inspect(parsed.data.path);
       if (!existing) return failure('not_found', 'File not found.');
       if (existing.datatype !== 'plain') {
@@ -249,7 +265,7 @@ export class LiveSyncVault {
         },
         parsed.data.expectedRevision
       );
-      if (!written) return failure('conflict', 'The file was modified by another client.');
+      if (!written) return { ok: false, error: revisionConflict(parsed.data.path) };
       return success({ path: existing.path, revision: written.revision });
     });
   }
@@ -302,16 +318,17 @@ export class LiveSyncVault {
     }
 
     return this.withCommonlib(async (commonlib) => {
+      await commonlib.reconcileBeforeMutation(parsed.data.path);
       const existing = await commonlib.inspect(parsed.data.path);
       if (!existing) return failure('not_found', 'File not found.');
       if (existing.datatype !== 'plain') {
         return failure('unsupported', 'Only plain Markdown notes can be deleted.');
       }
       if (existing.revision !== parsed.data.expectedRevision) {
-        return failure('conflict', 'The file was modified by another client.');
+        return { ok: false, error: revisionConflict(parsed.data.path) };
       }
       const removed = await commonlib.remove(existing.path, parsed.data.expectedRevision);
-      if (!removed) return failure('conflict', 'The file was modified by another client.');
+      if (!removed) return { ok: false, error: revisionConflict(parsed.data.path) };
       return success({ path: existing.path, revision: removed.revision });
     });
   }
@@ -322,12 +339,13 @@ export class LiveSyncVault {
     transform: (content: string) => string,
   ): Promise<VaultResult<WriteVaultFileData>> {
     return this.withCommonlib(async (commonlib) => {
+      await commonlib.reconcileBeforeMutation(path);
       const existing = await commonlib.inspect(path);
       if (!existing) return failure('not_found', 'File not found.');
       if (existing.datatype !== 'plain') return failure('unsupported', 'Only plain Markdown notes can be updated.');
       const file = await commonlib.read(existing.path, VAULT_LIMITS.maxReadBytes);
       if (!file) return failure('not_found', 'File not found.');
-      if (file.revision !== expectedRevision) return failure('conflict', 'The file was modified by another client.');
+      if (file.revision !== expectedRevision) return { ok: false, error: revisionConflict(path) };
       const content = transform(file.content);
       if (content === file.content) return success({ path: existing.path, revision: file.revision });
       const size = utf8Bytes(content);
@@ -338,7 +356,7 @@ export class LiveSyncVault {
         { ctime: existing.ctime ?? Date.now(), mtime: Date.now(), size },
         expectedRevision,
       );
-      if (!written) return failure('conflict', 'The file was modified by another client.');
+      if (!written) return { ok: false, error: revisionConflict(path) };
       return success({ path: existing.path, revision: written.revision });
     });
   }
@@ -358,6 +376,8 @@ export class LiveSyncVault {
         await this.dependencies.releaseCommonlib(commonlib);
       }
     } catch (error) {
+      const structured = vaultErrorSchema.safeParse(error);
+      if (structured.success) return { ok: false, error: structured.data };
       return failure(errorCode(error), errorMessage(error));
     }
   }
@@ -367,7 +387,9 @@ function success<T>(data: T): VaultResult<T> {
   return { ok: true, data };
 }
 
-function failure(code: VaultErrorCode, message: string): VaultResult<never> {
+type OrdinaryErrorCode = Exclude<VaultErrorCode, 'revision_conflict' | 'conflict_reconciled' | 'livesync_conflict'>;
+
+function failure(code: OrdinaryErrorCode, message: string): VaultResult<never> {
   return { ok: false, error: { code, message } };
 }
 
@@ -378,6 +400,7 @@ function toPublicFile(file: CommonlibFileMetadata) {
     ...(file.size === undefined ? {} : { sizeBytes: file.size }),
     ...(file.ctime === undefined ? {} : { createdAt: file.ctime }),
     ...(file.mtime === undefined ? {} : { modifiedAt: file.mtime }),
+    ...(file.unresolvedVersions === undefined ? {} : { unresolvedVersions: file.unresolvedVersions }),
   };
 }
 
@@ -386,7 +409,7 @@ function isListedMarkdown(
   prefix: string,
   caseSensitive: boolean
 ): boolean {
-  if (file.datatype !== 'plain' || !isMarkdownPath(file.path)) return false;
+  if (!isMarkdownPath(file.path)) return false;
   if (prefix === '') return true;
   if (caseSensitive) return file.path.startsWith(prefix);
   return file.path.toLowerCase().startsWith(prefix.toLowerCase());
@@ -484,7 +507,7 @@ function decodeCursor(value: string | undefined, prefix: string): Cursor | undef
   }
 }
 
-function errorCode(error: unknown): VaultErrorCode {
+function errorCode(error: unknown): OrdinaryErrorCode {
   if (error && typeof error === 'object' && 'code' in error) {
     const code = error.code;
     if (
@@ -493,14 +516,12 @@ function errorCode(error: unknown): VaultErrorCode {
       || code === 'too_large'
       || code === 'not_found'
       || code === 'unavailable'
-      || code === 'conflict'
     ) {
       return code;
     }
   }
   if (error && typeof error === 'object' && 'status' in error) {
     if (error.status === 404) return 'not_found';
-    if (error.status === 409) return 'conflict';
     if (error.status === 503) return 'unavailable';
   }
   const message = error instanceof Error ? error.message : '';

@@ -120,6 +120,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
           sizeBytes: z.number().int().nonnegative().optional(),
           createdAt: z.number().int().nonnegative().optional(),
           modifiedAt: z.number().int().nonnegative().optional(),
+          unresolvedVersions: z.number().int().min(2).optional(),
         })),
         cursor: z.string().optional(),
       }),
@@ -157,6 +158,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
           sizeBytes: z.number().int().nonnegative().optional(),
           createdAt: z.number().int().nonnegative().optional(),
           modifiedAt: z.number().int().nonnegative().optional(),
+          unresolvedVersions: z.number().int().min(2).optional(),
         })),
         cursor: z.string().optional(),
       }),
@@ -182,7 +184,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'create_file',
       {
-        description: 'Create a new Markdown file in the configured vault.',
+        description: 'Create a new Markdown file in the configured vault. On revision_conflict or conflict_reconciled, reread and reassess. On livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: createFileInput,
         outputSchema: writeResult,
       },
@@ -191,7 +193,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'edit_file',
       {
-        description: 'Replace the contents of an existing Markdown file. Requires the current revision.',
+        description: 'Replace the contents of an existing Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: editFileInput,
         outputSchema: writeResult,
       },
@@ -200,7 +202,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'append_file',
       {
-        description: 'Append text exactly to an existing Markdown file. Requires the current revision.',
+        description: 'Append text exactly to an existing Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: appendFileInput,
         outputSchema: writeResult,
       },
@@ -209,7 +211,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'patch_file',
       {
-        description: 'Replace exact text in an existing Markdown file. The match must be unique unless replaceAll is true. Requires the current revision.',
+        description: 'Replace exact text in an existing Markdown file. The match must be unique unless replaceAll is true. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: patchFileInput,
         outputSchema: writeResult.extend({ replacements: z.number().int().positive() }),
       },
@@ -218,7 +220,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'patch_frontmatter',
       {
-        description: 'Update or remove top-level YAML frontmatter keys without replacing the note body. Requires the current revision.',
+        description: 'Update or remove top-level YAML frontmatter keys without replacing the note body. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: patchFrontmatterInput,
         outputSchema: writeResult.extend({ updated: z.array(z.string()), removed: z.array(z.string()) }),
       },
@@ -227,7 +229,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'delete_file',
       {
-        description: 'Delete a Markdown file. Requires the current revision.',
+        description: 'Delete a Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: deleteFileInput,
         outputSchema: writeResult,
       },
@@ -364,6 +366,7 @@ function success<T extends object>(data: T, text: string) {
 function vaultFailure(result: Exclude<VaultResult<unknown>, { ok: true }>) {
   return {
     isError: true as const,
+    structuredContent: { error: result.error },
     content: [{ type: 'text' as const, text: result.error.message }],
   };
 }

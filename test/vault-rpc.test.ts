@@ -41,7 +41,7 @@ describe('vault RPC', () => {
 
     expect(status).toEqual({
       ok: true,
-      data: { contractVersion: 2, compatible: true, reasons: [] },
+      data: { contractVersion: 3, compatible: true, reasons: [] },
     });
   });
 
@@ -121,7 +121,7 @@ describe('vault RPC', () => {
       path: 'notes/frontmatter.md',
       updates: { status: 'stale' },
       expectedRevision: beforeRevision,
-    })).resolves.toMatchObject({ ok: false, error: { code: 'conflict' } });
+    })).resolves.toMatchObject({ ok: false, error: { code: 'revision_conflict' } });
   });
 
   it('creates frontmatter with the note newline style and preserves the body verbatim', async () => {
@@ -240,7 +240,7 @@ describe('vault RPC', () => {
       path: 'notes/noop.md',
       updates: { next: 'yes' },
       expectedRevision: created.data.revision,
-    })).resolves.toMatchObject({ ok: false, error: { code: 'conflict' } });
+    })).resolves.toMatchObject({ ok: false, error: { code: 'revision_conflict' } });
   });
 
   it('appends and patches exact text with revision preconditions and ambiguity checks', async () => {
@@ -260,7 +260,7 @@ describe('vault RPC', () => {
       path: 'notes/derived.md',
       content: 'stale',
       expectedRevision: created.data.revision,
-    })).resolves.toMatchObject({ ok: false, error: { code: 'conflict' } });
+    })).resolves.toMatchObject({ ok: false, error: { code: 'revision_conflict' } });
 
     await expect(stub.patchVaultFile({
       path: 'notes/derived.md',
@@ -560,7 +560,7 @@ describe('vault RPC', () => {
     await expect(stub.createVaultFile({
       path: 'notes/created.md',
       content: '# again\n',
-    })).resolves.toMatchObject({ ok: false, error: { code: 'conflict' } });
+    })).resolves.toMatchObject({ ok: false, error: { code: 'revision_conflict' } });
 
     const edited = await stub.updateVaultFile({
       path: 'notes/created.md',
@@ -573,7 +573,7 @@ describe('vault RPC', () => {
       path: 'notes/created.md',
       content: '# stale\n',
       expectedRevision: created.data.revision,
-    })).resolves.toMatchObject({ ok: false, error: { code: 'conflict' } });
+    })).resolves.toMatchObject({ ok: false, error: { code: 'revision_conflict' } });
     await expect(stub.readVaultFile({ path: 'notes/created.md' })).resolves.toMatchObject({
       ok: true,
       data: { content: '# Edited\n' },

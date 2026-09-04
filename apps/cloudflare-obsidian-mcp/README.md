@@ -18,7 +18,26 @@ are normalized to ISO strings, binary scalars to base64 strings, and non-finite
 numbers to `.inf`, `-.inf`, or `.nan`. A `patch_frontmatter` request that makes
 no semantic change returns the existing revision without rewriting the note.
 
-## Configure
+## Conflict feedback
+
+Tool errors have `isError: true`, readable text, and
+`structuredContent.error` containing the semantic code and recovery route:
+
+- `revision_conflict`: reread and reassess before retrying; do not blindly replay.
+- `conflict_reconciled`: safe Commonlib reconciliation changed the revision tree,
+  but **did not apply your requested mutation**. Reread and reassess.
+- `livesync_conflict`: tell the user to resolve the named file in a full Obsidian
+  Self-hosted LiveSync client, then sync. Retrying unchanged cannot resolve it.
+
+Reads never resolve conflicts or return an unqualified winning branch. File and
+attachment listings include `unresolvedVersions` when multiple live versions
+exist. Automatic reconciliation runs only behind write authorization and the
+write kill switch. Binary conflicts are left to Obsidian's own policy.
+
+The semantic contract is version 3; deploy storage before the matching MCP
+Worker. This does not change the CouchDB replication protocol.
+
+## Deployment configuration
 
 Set these non-secret Worker variables before deployment:
 

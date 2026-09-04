@@ -10,6 +10,32 @@ are bounded. A deep cursor page still starts Commonlib's metadata traversal at
 the beginning and skips earlier document IDs. If large-vault staging shows this
 is material, the next optimization is a Commonlib enumeration start key.
 
+Conflict-aware listings add at most 100 metadata lookups per response. A page
+may be short or empty with a continuation cursor when many logical deletions
+are scanned; callers must follow the cursor. No branch bodies are hydrated.
+
+## Conflict reconciliation is bounded, not a tree-wide transaction
+
+`revision_conflict` means a rejected stale CAS: reread and reassess.
+`livesync_conflict` means unresolved LiveSync branches requiring Obsidian review.
+`conflict_reconciled` means safe pairwise progress, never successful execution
+of the triggering mutation. A read-only caller cannot cause that progress.
+
+Commonlib supplies merge content and pair ordering; MCP retains revision CAS
+without a request-wide Durable Object lock. Another replica may introduce or
+extend a leaf between checks. If the winning write succeeds but losing-leaf
+removal fails, both remain recoverable and MCP reports reconciliation progress.
+An interrupted request can likewise leave a partially reconciled tree, which
+the next operation inspects afresh. The deterministic database winner is not
+proof of the file currently displayed on any Obsidian device.
+
+The automatic budget is eight pairs, sixteen live leaves, and 512,000 bytes /
+1,024 chunks per required body. Over-limit, missing-history, missing-chunk,
+delete-versus-modify, and differing binary cases are left to Obsidian. No newer-
+mtime binary policy, background resolver, search index, or attachment storage
+change is implemented. Real-client staging evidence is recorded separately;
+hermetic revision-tree tests alone do not constitute staging acceptance.
+
 ## Worker WASM support and the xxhash compatibility shim
 
 Workers support imported, precompiled WebAssembly modules. They do not permit

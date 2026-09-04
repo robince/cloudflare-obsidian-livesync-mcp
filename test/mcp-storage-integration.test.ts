@@ -6,6 +6,7 @@ import { createVaultMcpServer } from '../apps/cloudflare-obsidian-mcp/src/vault-
 import type { VaultRpc } from '../apps/cloudflare-obsidian-mcp/src/vault-rpc';
 import fixture from './fixtures/livesync-1.0.21.json';
 import type { JsonObject } from '../src/types';
+import { conflictVault } from './conflict-fixtures';
 
 const closeables: Array<{ close(): Promise<void> }> = [];
 
@@ -23,6 +24,28 @@ function withoutRevision(document: JsonObject): JsonObject {
 }
 
 describe('MCP to storage Durable Object integration', () => {
+  it('preserves structured conflicts through a real MCP client and prevents read-only reconciliation', async () => {
+    const { stub, path, tree } = await conflictVault();
+    const before = await tree();
+    for (const writable of [false, true]) {
+      const server = createVaultMcpServer(stub as unknown as VaultRpc, {
+        writesEnabled: true, canRead: () => true, canWrite: () => writable,
+      });
+      const client = new Client({ name: 'conflict-client', version: '1' });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      closeables.push(client, server);
+      await Promise.all([client.connect(a), server.connect(b)]);
+      expect(await client.callTool({ name: 'read_file', arguments: { path } })).toMatchObject({
+        isError: true, structuredContent: { error: {
+          code: 'livesync_conflict', path, unresolvedVersions: 2, resolution: 'obsidian',
+        } },
+      });
+      const write = await client.callTool({ name: 'append_file', arguments: { path, expectedRevision: '2-b', content: 'NEVER' } });
+      expect(write.isError).toBe(true);
+      if (!writable) expect(await tree()).toEqual(before);
+      else expect(write).toMatchObject({ structuredContent: { error: { code: 'conflict_reconciled', path } } });
+    }
+  });
   it('exercises the complete tool surface through real RPC serialization', async () => {
     const name = `mcp-integration-${crypto.randomUUID().replaceAll('-', '')}`;
     const stub = env.POUCH_DATABASES.getByName(name);

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** Incremented whenever the semantic vault RPC wire contract changes. */
-export const CONTRACT_VERSION = 2 as const;
+export const CONTRACT_VERSION = 3 as const;
 
 export const VAULT_LIMITS = {
   maxListLimit: 100,
@@ -22,14 +22,30 @@ export const vaultErrorCodeSchema = z.enum([
   'unsupported',
   'too_large',
   'unavailable',
-  'conflict',
+  'revision_conflict',
+  'conflict_reconciled',
+  'livesync_conflict',
   'internal',
 ]);
 
-export const vaultErrorSchema = z.object({
-  code: vaultErrorCodeSchema,
-  message: z.string(),
-});
+export const vaultErrorSchema = z.discriminatedUnion('code', [
+  z.object({
+    code: z.enum(['invalid_input', 'not_found', 'unsupported', 'too_large', 'unavailable', 'internal']),
+    message: z.string(),
+  }),
+  z.object({
+    code: z.literal('revision_conflict'), message: z.string(), path: z.string(),
+    resolution: z.literal('reread_and_reassess'),
+  }),
+  z.object({
+    code: z.literal('conflict_reconciled'), message: z.string(), path: z.string(),
+    resolution: z.literal('reread_and_reassess'), unresolvedVersions: z.number().int().nonnegative(),
+  }),
+  z.object({
+    code: z.literal('livesync_conflict'), message: z.string(), path: z.string(),
+    resolution: z.literal('obsidian'), unresolvedVersions: z.number().int().nonnegative(),
+  }),
+]);
 
 export const vaultResultSchema = <T extends z.ZodType>(data: T) =>
   z.discriminatedUnion('ok', [
@@ -63,6 +79,7 @@ export const vaultFileSchema = z.object({
   sizeBytes: z.number().int().nonnegative().optional(),
   createdAt: z.number().int().nonnegative().optional(),
   modifiedAt: z.number().int().nonnegative().optional(),
+  unresolvedVersions: z.number().int().min(2).optional(),
 });
 export type VaultFile = z.infer<typeof vaultFileSchema>;
 

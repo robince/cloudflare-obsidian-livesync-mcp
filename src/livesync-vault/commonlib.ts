@@ -3,9 +3,13 @@ import {
   type DirectFileManipulatorOptions,
 } from '@vrtmrz/livesync-commonlib';
 import { decodeBinary } from '@vrtmrz/livesync-commonlib/compat/string_and_binary/convert';
+import { compareMTime } from '@vrtmrz/livesync-commonlib/compat/common/utils';
+import { TARGET_IS_NEW } from '@vrtmrz/livesync-commonlib/compat/common/models/shared.const.symbols';
 
 import { IN_PROCESS_COUCH_ORIGIN } from './in-process-couch-fetch';
 import type { VaultProfileInspection } from './profile';
+import { VAULT_LIMITS } from '@cloudflare-obsidian-livesync/contracts';
+import { livesyncConflict, reconciledConflict, throwVaultError } from './conflicts';
 
 export const COMMONLIB_VERSION = '0.1.19';
 
@@ -28,6 +32,8 @@ type RawNote = {
   size?: unknown;
   ctime?: unknown;
   mtime?: unknown;
+  _conflicts?: string[];
+  _revs_info?: { rev: string; status: string }[];
 };
 
 export interface CommonlibFile {
@@ -43,6 +49,8 @@ export interface CommonlibFileMetadata {
   size?: number;
   ctime?: number;
   mtime?: number;
+  unresolvedVersions?: number;
+  deleted?: boolean;
 }
 
 export interface CommonlibBinaryFile {
@@ -172,6 +180,7 @@ export class CommonlibFacade {
     expectedRevision?: string
   ): Promise<{ revision: string } | false> {
     await this.ready();
+    await this.assertUnconflicted(path);
     const documentId = await this.manipulator.path2id(path as CommonlibPath);
     const note = {
       _id: documentId,
@@ -210,6 +219,7 @@ export class CommonlibFacade {
 
   async remove(path: string, expectedRevision: string): Promise<{ revision: string } | false> {
     await this.ready();
+    await this.assertUnconflicted(path);
     const id = await this.manipulator.path2id(path as CommonlibPath);
     try {
       const current = await this.manipulator.liveSyncLocalDB.getRaw(id);
@@ -228,6 +238,127 @@ export class CommonlibFacade {
   async documentId(path: string): Promise<string> {
     await this.ready();
     return this.manipulator.path2id(path as CommonlibPath);
+  }
+
+  /** Metadata only: never resolves a conflict on a read/list path. */
+  async conflictVersions(path: string): Promise<number> {
+    await this.ready();
+    const entry = await this.conflictNote(path);
+    return entry ? 1 + (entry._conflicts?.length ?? 0) : 0;
+  }
+
+  private async assertUnconflicted(path: string): Promise<void> {
+    const versions = await this.conflictVersions(path);
+    if (versions > 1) throwVaultError(livesyncConflict(path, versions));
+  }
+
+  /** Called only from a write-authorized semantic operation, never raw replication. */
+  async reconcileBeforeMutation(path: string): Promise<void> {
+    await this.ready();
+    let changed = false;
+    const db = this.manipulator.liveSyncLocalDB;
+    for (let pair = 0; pair < 8; pair++) {
+      const observed = await this.conflictNote(path);
+      const versions = observed ? 1 + (observed._conflicts?.length ?? 0) : 0;
+      if (!observed || versions < 2) {
+        if (changed) throwVaultError(reconciledConflict(path, versions));
+        return;
+      }
+      const stop: () => never = () => throwVaultError(changed
+        ? reconciledConflict(path, versions) : livesyncConflict(path, versions));
+      // No binary decoding policy and no unbounded Commonlib chunk hydration.
+      if (!path.endsWith('.md') || noteDatatype(observed) !== 'plain') stop();
+      if (versions > 16) stop();
+      try {
+        // Validate every live leaf before asking Commonlib to classify a pair.
+        // Missing history/chunks must not be treated as empty or identical data.
+        for (const rev of [observed._rev, ...(observed._conflicts ?? [])]) {
+          const leaf = await db.getRaw(observed._id as CommonlibDocumentId, { rev, revs_info: true });
+          if (noteDatatype(leaf) !== 'plain' || isDeleted(leaf)) stop();
+          await this.validateMergeBody(leaf);
+          const shared = new Set(observed._revs_info?.filter(r => r.status === 'available').map(r => r.rev));
+          const base = leaf._revs_info?.filter(r => r.status === 'available' && shared.has(r.rev))
+            .sort((a, b) => parseInt(b.rev) - parseInt(a.rev))[0];
+          if (base && base.rev !== rev) {
+            await this.validateMergeBody(await db.getRaw(observed._id as CommonlibDocumentId, { rev: base.rev }));
+          }
+        }
+        const result = await db.tryAutoMerge(path as CommonlibPath, true);
+        if ('ok' in result) stop();
+        const fresh = await this.conflictNote(path);
+        if (!sameTree(observed, fresh)) stop();
+        let losingRev: string;
+        let winnerRev = observed._rev;
+        if ('result' in result) {
+          losingRev = result.conflictedRev;
+          if (!observed._conflicts?.includes(losingRev)) stop();
+          // Commonlib finds the nearest *available shared* ancestor. Validate
+          // that body's chunks as well; never infer ancestry from generation.
+          const other = await db.getRaw(observed._id as CommonlibDocumentId, { rev: losingRev, revs_info: true });
+          const available = new Set(observed._revs_info?.filter(r => r.status === 'available').map(r => r.rev));
+          const base = other._revs_info?.filter(r => r.status === 'available' && available.has(r.rev))
+            .sort((a, b) => parseInt(b.rev) - parseInt(a.rev))[0];
+          if (!base) stop();
+          await this.validateMergeBody(await db.getRaw(observed._id as CommonlibDocumentId, { rev: base!.rev }));
+          if (new TextEncoder().encode(result.result).byteLength > VAULT_LIMITS.maxWriteBytes) stop();
+          // Deliberately bypass public write's no-conflicts guard, but retain
+          // Commonlib's ordinary exact-revision CAS, never a forced branch put.
+          const written = await db.putDBEntryWithLiveBaseRevision({
+            _id: observed._id as CommonlibDocumentId, path: path as CommonlibPath,
+            data: new Blob([result.result], { type: 'text/plain' }),
+            type: 'plain', datatype: 'plain', children: [], eden: {},
+            ctime: typeof observed.ctime === 'number' ? observed.ctime : Date.now(),
+            mtime: Date.now(), size: new TextEncoder().encode(result.result).byteLength,
+          }, observed._rev);
+          if (!written) stop();
+          winnerRev = written.rev;
+          changed = true;
+        } else {
+          if (!result.leftLeaf || !result.rightLeaf
+            || result.leftRev !== observed._rev
+            || result.leftLeaf.data !== result.rightLeaf.data
+            || result.leftLeaf.deleted !== result.rightLeaf.deleted) stop();
+          // Match the host's duplicate policy only after exact byte equality.
+          losingRev = compareMTime(result.leftLeaf.mtime, result.rightLeaf.mtime) === TARGET_IS_NEW
+            ? result.leftRev : result.rightRev;
+        }
+        const beforeDelete = await this.conflictNote(path);
+        const expected = { ...observed, _rev: winnerRev };
+        if (!sameTree(expected, beforeDelete) || !beforeDelete
+          || ![beforeDelete._rev, ...(beforeDelete._conflicts ?? [])].includes(losingRev)) stop();
+        await db.removeRaw(observed._id as CommonlibDocumentId, losingRev);
+        changed = true;
+      } catch (error) {
+        if (error instanceof Error && 'resolution' in error) throw error;
+        // A failed CAS, unavailable body, or interrupted resolution preserves
+        // remaining leaves. Never apply the user's original mutation.
+        const remaining = await this.conflictVersions(path);
+        throwVaultError(changed ? reconciledConflict(path, remaining) : livesyncConflict(path, remaining));
+      }
+    }
+    throwVaultError(reconciledConflict(path, await this.conflictVersions(path)));
+  }
+
+  private async validateMergeBody(entry: RawNote): Promise<void> {
+    if (isDeleted(entry) || !Array.isArray(entry.children) || entry.children.length > 1024) throw new Error('Unreadable merge body');
+    let bytes = 0;
+    for (const id of entry.children) {
+      if (typeof id !== 'string') throw new Error('Invalid chunk');
+      const piece = inlineChunk(entry.eden, id) ?? await this.rawChunk(id);
+      if (piece === false) throw new Error('Missing merge chunk');
+      bytes += new TextEncoder().encode(piece).byteLength;
+      if (bytes > VAULT_LIMITS.maxReadBytes) throw new Error('Merge body too large');
+    }
+  }
+
+  private async conflictNote(path: string): Promise<RawNote | false> {
+    const id = await this.manipulator.path2id(path as CommonlibPath);
+    try {
+      return await this.manipulator.liveSyncLocalDB.getRaw(id, { conflicts: true, revs_info: true });
+    } catch (error) {
+      if (isMissing(error)) return false;
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
@@ -254,7 +385,8 @@ export class CommonlibFacade {
   private async rawNote(path: string): Promise<RawNote | false> {
     const id = await this.manipulator.path2id(path as CommonlibPath);
     try {
-      const entry = await this.manipulator.liveSyncLocalDB.getRaw(id) as unknown as RawNote;
+      const entry = await this.manipulator.liveSyncLocalDB.getRaw(id, { conflicts: true, revs_info: true }) as unknown as RawNote;
+      if (entry._conflicts?.length) throwVaultError(livesyncConflict(path, entry._conflicts.length + 1));
       if (!entry._rev || isDeleted(entry) || noteDatatype(entry) === 'leaf') return false;
       return entry;
     } catch (error) {
@@ -281,7 +413,6 @@ function listedMetadata(entry: EnumeratedEntry): CommonlibFileMetadata | undefin
   if (typeof entry._id !== 'string' || typeof entry._rev !== 'string' || typeof entry.path !== 'string') {
     return undefined;
   }
-  if (isDeleted(entry)) return undefined;
   return {
     id: entry._id,
     path: entry.path,
@@ -290,7 +421,13 @@ function listedMetadata(entry: EnumeratedEntry): CommonlibFileMetadata | undefin
     size: typeof entry.size === 'number' ? entry.size : undefined,
     ctime: typeof entry.ctime === 'number' ? entry.ctime : undefined,
     mtime: typeof entry.mtime === 'number' ? entry.mtime : undefined,
+    deleted: isDeleted(entry),
   };
+}
+
+function sameTree(left: RawNote, right: RawNote | false): boolean {
+  return !!right && left._rev === right._rev
+    && JSON.stringify([...(left._conflicts ?? [])].sort()) === JSON.stringify([...(right._conflicts ?? [])].sort());
 }
 
 function isDeleted(entry: { deleted?: unknown; _deleted?: unknown }): boolean {

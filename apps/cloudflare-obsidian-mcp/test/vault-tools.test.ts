@@ -20,7 +20,7 @@ import type { VaultRpc } from '../src/vault-rpc';
 
 const fakeRpc: VaultRpc = {
   async vaultStatus() {
-    return { ok: true, data: { contractVersion: 2, compatible: true, reasons: [] } };
+    return { ok: true, data: { contractVersion: 3, compatible: true, reasons: [] } };
   },
   async listVaultFiles() {
     return { ok: true, data: { files: [{ path: 'notes/a.md', revision: '1-a', sizeBytes: 4, modifiedAt: 2 }] } };
@@ -114,7 +114,7 @@ describe('MCP vault surface', () => {
       canWrite: () => true,
     });
     await expect(allowed.vaultStatus()).resolves.toMatchObject({
-      structuredContent: { contractVersion: 2, compatible: true },
+      structuredContent: { contractVersion: 3, compatible: true },
     });
     await expect(allowed.listFiles({})).resolves.toMatchObject({
       structuredContent: { files: [{ path: 'notes/a.md' }] },
@@ -171,7 +171,7 @@ describe('MCP vault surface', () => {
     await expect(handlers.vaultStatus()).resolves.toMatchObject({ isError: true });
   });
 
-  it('omits structured content on vault errors', async () => {
+  it('preserves structured content on vault errors', async () => {
     const failing: VaultRpc = {
       ...fakeRpc,
       async readVaultFile() {
@@ -181,7 +181,7 @@ describe('MCP vault surface', () => {
     const handlers = createVaultToolHandlers(failing, { canRead: () => true });
     const result = await handlers.readFile({ path: 'notes/missing.md' });
     expect(result).toMatchObject({ isError: true });
-    expect(result).not.toHaveProperty('structuredContent');
+    expect(result).toMatchObject({ structuredContent: { error: { code: 'not_found' } } });
   });
 
   it('rejects a VAULT_DATABASE that LiveSync could not have created', () => {
