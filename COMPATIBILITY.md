@@ -52,7 +52,34 @@ forwarding the CouchDB password.
   one Durable Object. This is suitable for initial compatibility, but large
   vaults will need purpose-built SQL indexes and pagination work.
 
-## Compatibility evidence
+## Semantic MCP conflicts (contract version 3)
+
+Raw CouchDB replication remains passive: it retains divergent live leaves.
+The deterministic PouchDB winner is not necessarily the version displayed by
+an Obsidian device. MCP reads fail with `livesync_conflict` instead of silently
+returning that winner. Listings flag affected paths with `unresolvedVersions`.
+
+Ordinary stale writes return `revision_conflict`: reread, reassess the intended
+change, and retry only if appropriate. No forced revision branch is created.
+After write authorization, existing conflicts may be reconciled using pinned
+Commonlib 0.1.19's `tryAutoMerge(path, true)`. A safe result is committed with
+ordinary revision CAS, followed by removal of only the observed losing leaf.
+Duplicate bytes use the pinned Obsidian host's duplicate-selection policy.
+Any progress returns `conflict_reconciled`; the triggering mutation is never
+replayed. A fresh read is required before the caller tries again.
+
+Unsafe/unreadable conflicts return `livesync_conflict` with the file path,
+version count, and instructions to resolve through a full Obsidian Self-hosted
+LiveSync client and sync the result. Reads never merge. MCP does not implement
+the host's newer-mtime binary policy or provide human-selection tools.
+
+The resolver is conservative: at most eight pairs per RPC, sixteen live leaves,
+and 512,000 decoded bytes/1,024 chunks per required body. Exceeding these bounds
+preserves remaining leaves and directs the caller to Obsidian. Revision CAS
+protects each commit, not an atomic transaction over the complete revision tree;
+concurrent replication can introduce another conflict at any time.
+
+## Automated compatibility evidence
 
 The default test suite covers authentication/CORS, CRUD, attachments, bulk
 operations, selector paging, long-poll, continuous Fast Fetch framing,

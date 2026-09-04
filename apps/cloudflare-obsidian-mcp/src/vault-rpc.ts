@@ -1,10 +1,21 @@
 import type {
+  AppendVaultFileRequest,
   CreateVaultFileRequest,
   DeleteVaultFileRequest,
+  ListVaultAttachmentsData,
+  ListVaultAttachmentsRequest,
   ListVaultFilesData,
   ListVaultFilesRequest,
+  PatchVaultFileData,
+  PatchVaultFileRequest,
+  PatchVaultFrontmatterData,
+  PatchVaultFrontmatterRequest,
+  ReadVaultAttachmentData,
+  ReadVaultAttachmentRequest,
   ReadVaultFileData,
   ReadVaultFileRequest,
+  ReadVaultFrontmatterData,
+  ReadVaultFrontmatterRequest,
   UpdateVaultFileRequest,
   VaultResult,
   VaultStatusData,
@@ -27,9 +38,15 @@ export function isVaultDatabaseName(value: unknown): value is string {
 export interface VaultRpc {
   vaultStatus(): Promise<VaultResult<VaultStatusData>>;
   listVaultFiles(request: ListVaultFilesRequest): Promise<VaultResult<ListVaultFilesData>>;
+  listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>>;
   readVaultFile(request: ReadVaultFileRequest): Promise<VaultResult<ReadVaultFileData>>;
+  readVaultAttachment(request: ReadVaultAttachmentRequest): Promise<VaultResult<ReadVaultAttachmentData>>;
+  readVaultFrontmatter(request: ReadVaultFrontmatterRequest): Promise<VaultResult<ReadVaultFrontmatterData>>;
   createVaultFile(request: CreateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>>;
   updateVaultFile(request: UpdateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>>;
+  appendVaultFile(request: AppendVaultFileRequest): Promise<VaultResult<WriteVaultFileData>>;
+  patchVaultFile(request: PatchVaultFileRequest): Promise<VaultResult<PatchVaultFileData>>;
+  patchVaultFrontmatter(request: PatchVaultFrontmatterRequest): Promise<VaultResult<PatchVaultFrontmatterData>>;
   deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>>;
 }
 
@@ -41,9 +58,15 @@ function unavailableRpc(): VaultRpc {
   return {
     vaultStatus: async () => invalid,
     listVaultFiles: async () => invalid,
+    listVaultAttachments: async () => invalid,
     readVaultFile: async () => invalid,
+    readVaultAttachment: async () => invalid,
+    readVaultFrontmatter: async () => invalid,
     createVaultFile: async () => invalid,
     updateVaultFile: async () => invalid,
+    appendVaultFile: async () => invalid,
+    patchVaultFile: async () => invalid,
+    patchVaultFrontmatter: async () => invalid,
     deleteVaultFile: async () => invalid,
   };
 }

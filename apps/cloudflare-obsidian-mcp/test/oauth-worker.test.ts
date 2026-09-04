@@ -15,6 +15,8 @@ type TokenResponse = { access_token: string; scope: string; token_type: string }
 type StorageSetupRpc = {
   ensureDatabase(name: string): Promise<void>;
   putDocument(name: string, document: JsonObject): Promise<void>;
+  getDocument(name: string, id: string, options?: { conflicts?: boolean }): Promise<JsonObject>;
+  fetch(request: Request): Promise<Response>;
 };
 
 afterEach(() => {
@@ -210,6 +212,25 @@ describe('OAuth Worker boundary', () => {
     })).resolves.toMatchObject({
       structuredContent: { content: fixture.files['notes/unicode-雪.md'] },
     });
+
+    const storage = env.POUCH_DATABASES.getByName('test-vault') as unknown as StorageSetupRpc;
+    const path = 'notes/http-conflict.md';
+    const docs = ['a', 'b'].map(rev => ({
+      _id: path, _rev: `1-${rev}`, path, type: 'plain', datatype: 'plain',
+      children: [], eden: {}, size: 0, ctime: 1, mtime: 1,
+    }));
+    const inserted = await storage.fetch(new Request('https://test/_bulk_docs', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-pouchdb-database': 'test-vault' },
+      body: JSON.stringify({ docs, new_edits: false }),
+    }));
+    expect(inserted.status).toBe(201);
+    const before = await storage.getDocument('test-vault', path, { conflicts: true });
+    expect(await mcpCall(tokenPayload.access_token, 'tools/call', { name: 'read_file', arguments: { path } }))
+      .toMatchObject({ isError: true, structuredContent: { error: {
+        code: 'livesync_conflict', path, unresolvedVersions: 2, resolution: 'obsidian',
+        message: expect.stringContaining('full Obsidian client'),
+      } } });
+    expect(await storage.getDocument('test-vault', path, { conflicts: true })).toEqual(before);
 
     const replay = await workerFetch(callbackUrl, { headers: { cookie }, redirect: 'manual' });
     expect(replay.status).toBe(400);

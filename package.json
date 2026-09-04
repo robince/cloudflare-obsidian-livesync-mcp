@@ -12,11 +12,12 @@
     "check": "npm run check:dependencies && npm run check:storage && npm run check --workspaces --if-present",
     "check:dependencies": "node --test test/production-dependencies.test.mjs && node scripts/check-production-dependencies.mjs",
     "check:storage": "tsc --noEmit",
-    "test": "npm run test:dependencies && vitest run test/worker.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts && vitest run test/mcp-storage-integration.test.ts",
+    "test": "npm run test:dependencies && vitest run test/worker.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts test/vault-conflicts.test.ts && vitest run test/mcp-storage-integration.test.ts",
     "test:dependencies": "node --test test/production-dependencies.test.mjs",
     "fixture:livesync": "node scripts/generate-livesync-fixture.mjs",
     "test:current-pouchdb": "vitest run test/current-pouchdb.test.ts",
-    "test:all": "npm test && npm run test --workspaces --if-present",
+    "test:all": "npm test && npm run test --workspaces --if-present && npm run test:staging-config",
+    "test:staging-config": "node --test test/staging-config.test.mjs",
     "test:upstream-pouchdb": "npm run test:current-pouchdb",
     "types": "npm run types:storage && npm run types --workspaces --if-present",
     "types:check": "npm run types:check:storage && npm run types:check --workspaces --if-present",
@@ -33,7 +34,8 @@
     "pouchdb-adapter-sqlite-core": "npm:@robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0",
     "pouchdb-core": "^9.0.0",
     "pouchdb-replication": "^9.0.0",
-    "xxhash-wasm-102": "npm:xxhash-wasm@1.1.0"
+    "xxhash-wasm-102": "npm:xxhash-wasm@1.1.0",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.0",

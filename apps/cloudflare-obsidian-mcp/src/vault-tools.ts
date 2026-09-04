@@ -3,7 +3,12 @@ import { getMcpAuthContext } from 'agents/mcp/server';
 import { z } from 'zod';
 
 import {
+  appendVaultFileRequestSchema,
   CONTRACT_VERSION,
+  frontmatterSchema,
+  patchVaultFileRequestSchema,
+  patchVaultFrontmatterRequestSchema,
+  readVaultAttachmentRequestSchema,
   VAULT_LIMITS,
   vaultContentSchema,
   type VaultResult,
@@ -31,8 +36,14 @@ export const VAULT_TOOL_NAMES = [
   'vault_status',
   'list_files',
   'read_file',
+  'read_frontmatter',
+  'list_attachments',
+  'read_attachment',
   'create_file',
   'edit_file',
+  'append_file',
+  'patch_file',
+  'patch_frontmatter',
   'delete_file',
 ] as const;
 
@@ -61,6 +72,13 @@ export const deleteFileInput = z.object({
   path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
   expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
 }).strict();
+
+export const appendFileInput = appendVaultFileRequestSchema;
+export const patchFileInput = patchVaultFileRequestSchema;
+export const readFrontmatterInput = readFileInput;
+export const patchFrontmatterInput = patchVaultFrontmatterRequestSchema;
+export const listAttachmentsInput = listFilesInput;
+export const readAttachmentInput = readVaultAttachmentRequestSchema;
 
 export type VaultToolAuth = {
   canRead?: () => boolean;
@@ -96,7 +114,16 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
       description: 'List Markdown files in the configured vault.',
       inputSchema: listFilesInput,
       outputSchema: z.object({
-        files: z.array(z.object({ path: z.string(), revision: z.string() })),
+        files: z.array(z.object({
+          path: z.string(),
+          revision: z.string(),
+          sizeBytes: z.number().int().nonnegative().optional(),
+          createdAt: z.number().int().nonnegative().optional()
+            .describe('Unix epoch time in milliseconds.'),
+          modifiedAt: z.number().int().nonnegative().optional()
+            .describe('Unix epoch time in milliseconds.'),
+          unresolvedVersions: z.number().int().min(2).optional(),
+        })),
         cursor: z.string().optional(),
       }),
     },
@@ -111,11 +138,57 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     },
     handlers.readFile,
   );
+  server.registerTool(
+    'read_frontmatter',
+    {
+      description: 'Read a JSON-compatible view of YAML frontmatter without returning the note body. YAML timestamps, binary values, and non-finite numbers are returned as strings.',
+      inputSchema: readFrontmatterInput,
+      outputSchema: z.object({ path: z.string(), revision: z.string(), frontmatter: frontmatterSchema }),
+    },
+    handlers.readFrontmatter,
+  );
+  server.registerTool(
+    'list_attachments',
+    {
+      description: 'List non-Markdown files in the configured vault without returning their content.',
+      inputSchema: listAttachmentsInput,
+      outputSchema: z.object({
+        attachments: z.array(z.object({
+          path: z.string(),
+          revision: z.string(),
+          mimeType: z.string(),
+          sizeBytes: z.number().int().nonnegative().optional(),
+          createdAt: z.number().int().nonnegative().optional()
+            .describe('Unix epoch time in milliseconds.'),
+          modifiedAt: z.number().int().nonnegative().optional()
+            .describe('Unix epoch time in milliseconds.'),
+          unresolvedVersions: z.number().int().min(2).optional(),
+        })),
+        cursor: z.string().optional(),
+      }),
+    },
+    handlers.listAttachments,
+  );
+  server.registerTool(
+    'read_attachment',
+    {
+      description: `Read one non-Markdown file as base64, up to ${VAULT_LIMITS.maxAttachmentReadBytes} decoded bytes.`,
+      inputSchema: readAttachmentInput,
+      outputSchema: z.object({
+        path: z.string(),
+        revision: z.string(),
+        mimeType: z.string(),
+        sizeBytes: z.number().int().nonnegative(),
+        contentBase64: z.string(),
+      }),
+    },
+    handlers.readAttachment,
+  );
   if (auth.writesEnabled === true) {
     server.registerTool(
       'create_file',
       {
-        description: 'Create a new Markdown file in the configured vault.',
+        description: 'Create a new Markdown file in the configured vault. On revision_conflict or conflict_reconciled, reread and reassess. On livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: createFileInput,
         outputSchema: writeResult,
       },
@@ -124,16 +197,43 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     server.registerTool(
       'edit_file',
       {
-        description: 'Replace the contents of an existing Markdown file. Requires the current revision.',
+        description: 'Replace the contents of an existing Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: editFileInput,
         outputSchema: writeResult,
       },
       handlers.editFile,
     );
     server.registerTool(
+      'append_file',
+      {
+        description: 'Append text exactly to an existing Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
+        inputSchema: appendFileInput,
+        outputSchema: writeResult,
+      },
+      handlers.appendFile,
+    );
+    server.registerTool(
+      'patch_file',
+      {
+        description: 'Replace exact text in an existing Markdown file. The match must be unique unless replaceAll is true. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
+        inputSchema: patchFileInput,
+        outputSchema: writeResult.extend({ replacements: z.number().int().positive() }),
+      },
+      handlers.patchFile,
+    );
+    server.registerTool(
+      'patch_frontmatter',
+      {
+        description: 'Update or remove top-level YAML frontmatter keys without replacing the note body. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
+        inputSchema: patchFrontmatterInput,
+        outputSchema: writeResult.extend({ updated: z.array(z.string()), removed: z.array(z.string()) }),
+      },
+      handlers.patchFrontmatter,
+    );
+    server.registerTool(
       'delete_file',
       {
-        description: 'Delete a Markdown file. Requires the current revision.',
+        description: 'Delete a Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: deleteFileInput,
         outputSchema: writeResult,
       },
@@ -180,6 +280,24 @@ export function createVaultToolHandlers(rpc: VaultRpc, auth: VaultToolAuth = {})
       if (!result.ok) return vaultFailure(result);
       return success(result.data, `Read ${result.data.path}.`);
     },
+    readFrontmatter: async (request: z.infer<typeof readFrontmatterInput>) => {
+      if (!resolved.canRead()) return denied(READ_SCOPE);
+      const result = await rpc.readVaultFrontmatter(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Read frontmatter from ${result.data.path}.`);
+    },
+    listAttachments: async (request: z.infer<typeof listAttachmentsInput>) => {
+      if (!resolved.canRead()) return denied(READ_SCOPE);
+      const result = await rpc.listVaultAttachments(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `${result.data.attachments.length} attachment(s) returned.`);
+    },
+    readAttachment: async (request: z.infer<typeof readAttachmentInput>) => {
+      if (!resolved.canRead()) return denied(READ_SCOPE);
+      const result = await rpc.readVaultAttachment(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Read ${result.data.path} (${result.data.sizeBytes} bytes).`);
+    },
     createFile: async (request: z.infer<typeof createFileInput>) => {
       if (!resolved.writesEnabled || !resolved.canRead() || !resolved.canWrite()) return denied(WRITE_SCOPE);
       const result = await rpc.createVaultFile(request);
@@ -191,6 +309,24 @@ export function createVaultToolHandlers(rpc: VaultRpc, auth: VaultToolAuth = {})
       const result = await rpc.updateVaultFile(request);
       if (!result.ok) return vaultFailure(result);
       return success(result.data, `Updated ${result.data.path}.`);
+    },
+    appendFile: async (request: z.infer<typeof appendFileInput>) => {
+      if (!resolved.writesEnabled || !resolved.canRead() || !resolved.canWrite()) return denied(WRITE_SCOPE);
+      const result = await rpc.appendVaultFile(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Appended to ${result.data.path}.`);
+    },
+    patchFile: async (request: z.infer<typeof patchFileInput>) => {
+      if (!resolved.writesEnabled || !resolved.canRead() || !resolved.canWrite()) return denied(WRITE_SCOPE);
+      const result = await rpc.patchVaultFile(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Patched ${result.data.path} (${result.data.replacements} replacement(s)).`);
+    },
+    patchFrontmatter: async (request: z.infer<typeof patchFrontmatterInput>) => {
+      if (!resolved.writesEnabled || !resolved.canRead() || !resolved.canWrite()) return denied(WRITE_SCOPE);
+      const result = await rpc.patchVaultFrontmatter(request);
+      if (!result.ok) return vaultFailure(result);
+      return success(result.data, `Patched frontmatter in ${result.data.path}.`);
     },
     deleteFile: async (request: z.infer<typeof deleteFileInput>) => {
       if (!resolved.writesEnabled || !resolved.canRead() || !resolved.canWrite()) return denied(WRITE_SCOPE);
@@ -234,6 +370,7 @@ function success<T extends object>(data: T, text: string) {
 function vaultFailure(result: Exclude<VaultResult<unknown>, { ok: true }>) {
   return {
     isError: true as const,
+    structuredContent: { error: result.error },
     content: [{ type: 'text' as const, text: result.error.message }],
   };
 }
