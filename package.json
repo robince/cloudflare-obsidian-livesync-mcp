@@ -36,6 +36,9 @@
     "types:check": "npm run types:check:storage && npm run types:check --workspaces --if-present",
     "types:storage": "wrangler types",
     "types:check:storage": "wrangler types --check",
+    "deploy": "npm run deploy:storage && npm run deploy:mcp",
+    "deploy:storage": "wrangler deploy --secrets-file .dev.vars",
+    "deploy:mcp": "wrangler deploy --config apps/cloudflare-obsidian-mcp/wrangler.jsonc --secrets-file apps/cloudflare-obsidian-mcp/.dev.vars",
     "dry-run": "npm run dry-run:storage && npm run dry-run --workspaces --if-present",
     "dry-run:storage": "wrangler deploy --dry-run --outdir dist/storage"
   },

@@ -80,10 +80,13 @@ register write tools. When enabled, every create, edit, and delete checks the
 kill switch again and requires both `vault:read` and `vault:write`, as well as
 the current runtime allowlist.
 
-Create and configure the `OAUTH_KV` namespace in the deployed Wrangler config;
-the committed preview ID is only a local placeholder. The Worker also needs the
-cross-script `POUCH_DATABASES` Durable Object binding targeting the unchanged
-`cloudflare-pouchdb` Worker.
+Wrangler automatically creates and binds the `OAUTH_KV` namespace on the first
+deployment. The Worker also needs the cross-script `POUCH_DATABASES` Durable
+Object binding targeting the unchanged `cloudflare-pouchdb` Worker.
+
+Copy `.dev.vars.example` to `.dev.vars`, fill in the GitHub OAuth credentials,
+then deploy from the repository root with `npm run deploy:mcp`. To deploy both
+the storage and MCP Workers, use `npm run deploy`.
 
 ## Verify
 

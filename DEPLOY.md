@@ -1,8 +1,8 @@
 # Deployment
 
 This guide deploys the Cloudflare PouchDB storage Worker to your own Cloudflare
-account. It does not deploy the optional MCP Worker under
-`apps/cloudflare-obsidian-mcp`.
+account. The optional MCP Worker can be deployed alongside it after its GitHub
+OAuth settings are configured.
 
 ## Deploy from this private repository
 
@@ -80,3 +80,33 @@ repository under **Worker > Settings > Builds** in the Cloudflare dashboard for
 automatic deployments. The Cloudflare Workers and Pages GitHub app must be
 granted access to the repository.
 
+## Deploy the MCP Worker
+
+The MCP Worker connects directly to the storage Worker's Durable Object. It
+does not need the CouchDB URL or password. Before its first deployment:
+
+1. Register a GitHub OAuth app. Set its homepage to the MCP Worker's expected
+   origin and its callback URL to that origin plus `/oauth/github/callback`.
+2. In `apps/cloudflare-obsidian-mcp/wrangler.jsonc`, set `VAULT_DATABASE` to the
+   database name used by Obsidian, `MCP_PUBLIC_BASE_URL` to the MCP Worker's
+   exact HTTPS origin, and `GITHUB_ALLOWED_LOGINS` to the GitHub accounts that
+   may connect. Leave `MCP_WRITES_ENABLED` as `false` for the initial test.
+3. Copy `apps/cloudflare-obsidian-mcp/.dev.vars.example` to
+   `apps/cloudflare-obsidian-mcp/.dev.vars` and fill in the OAuth client ID and
+   secret.
+
+Then deploy the MCP Worker:
+
+```sh
+npm run deploy:mcp
+```
+
+Wrangler automatically provisions and binds the OAuth KV namespace during the
+first deployment. No separate KV command or resource ID is required.
+
+For a fresh installation, after both secret files and the MCP variables are
+configured, deploy both Workers in dependency order with:
+
+```sh
+npm run deploy
+```
