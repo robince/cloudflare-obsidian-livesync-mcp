@@ -10,13 +10,16 @@ This Worker exposes authenticated tools for one configured vault:
 It never accepts a database name from an MCP client. Editing, appending,
 patching, frontmatter updates, and deletion require the current document
 revision; creation is create-only. File listings include LiveSync's size,
-creation-time, and modification-time metadata when present. Attachment reads
-are base64 encoded and limited to 512,000 decoded bytes.
+creation-time, and modification-time metadata as Unix epoch milliseconds when
+present. Attachment reads are base64 encoded and limited to 512,000 decoded
+bytes.
 
 `read_frontmatter` returns a JSON-compatible view of YAML. Explicit timestamps
 are normalized to ISO strings, binary scalars to base64 strings, and non-finite
 numbers to `.inf`, `-.inf`, or `.nan`. A `patch_frontmatter` request that makes
 no semantic change returns the existing revision without rewriting the note.
+Frontmatter input is bounded to 512,000 encoded bytes, 32 nested levels, and
+10,000 JSON values before YAML serialization.
 
 ## Conflict feedback
 

@@ -11,6 +11,9 @@ export const VAULT_LIMITS = {
   maxWriteBytes: 512_000,
   maxPatchTextBytes: 64_000,
   maxFrontmatterKeys: 100,
+  maxFrontmatterBytes: 512_000,
+  maxFrontmatterDepth: 32,
+  maxFrontmatterNodes: 10_000,
   maxPathLength: 1024,
   maxCursorLength: 2048,
   maxRevisionLength: 256,
@@ -77,8 +80,10 @@ export const vaultFileSchema = z.object({
   path: z.string(),
   revision: z.string(),
   sizeBytes: z.number().int().nonnegative().optional(),
-  createdAt: z.number().int().nonnegative().optional(),
-  modifiedAt: z.number().int().nonnegative().optional(),
+  createdAt: z.number().int().nonnegative().optional()
+    .describe('Unix epoch time in milliseconds.'),
+  modifiedAt: z.number().int().nonnegative().optional()
+    .describe('Unix epoch time in milliseconds.'),
   unresolvedVersions: z.number().int().min(2).optional(),
 });
 export type VaultFile = z.infer<typeof vaultFileSchema>;
@@ -140,8 +145,19 @@ export type PatchVaultFileData = z.infer<typeof patchVaultFileDataSchema>;
 export const readVaultFrontmatterRequestSchema = readVaultFileRequestSchema;
 export type ReadVaultFrontmatterRequest = ReadVaultFileRequest;
 
-export const jsonValueSchema: z.ZodType<unknown> = z.json();
-export const frontmatterSchema = z.record(z.string().min(1).max(256), jsonValueSchema);
+export const jsonValueSchema: z.ZodType<unknown> = z.unknown().superRefine((value, context) => {
+  const problem = boundedJsonProblem(value);
+  if (problem) context.addIssue({ code: 'custom', message: problem });
+});
+export const frontmatterSchema = z.record(z.string().min(1).max(256), z.unknown())
+  .superRefine((value, context) => {
+    const problem = boundedJsonProblem(value);
+    if (problem) context.addIssue({ code: 'custom', message: problem });
+  })
+  .describe(
+    `JSON-compatible mapping limited to ${VAULT_LIMITS.maxFrontmatterBytes} UTF-8 bytes, `
+    + `${VAULT_LIMITS.maxFrontmatterDepth} levels, and ${VAULT_LIMITS.maxFrontmatterNodes} values.`,
+  );
 
 export const readVaultFrontmatterDataSchema = z.object({
   path: z.string(),
@@ -223,3 +239,77 @@ export const deleteVaultFileRequestSchema = z.object({
   expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
 }).strict();
 export type DeleteVaultFileRequest = z.infer<typeof deleteVaultFileRequestSchema>;
+
+function boundedJsonProblem(root: unknown): string | undefined {
+  const encoder = new TextEncoder();
+  const stack: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const seen = new WeakSet<object>();
+  let nodes = 0;
+  let bytes = 0;
+
+  const addBytes = (count: number): string | undefined => {
+    bytes += count;
+    return bytes > VAULT_LIMITS.maxFrontmatterBytes
+      ? `Frontmatter JSON must not exceed ${VAULT_LIMITS.maxFrontmatterBytes} UTF-8 bytes.`
+      : undefined;
+  };
+
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop()!;
+    nodes++;
+    if (nodes > VAULT_LIMITS.maxFrontmatterNodes) {
+      return `Frontmatter JSON must not exceed ${VAULT_LIMITS.maxFrontmatterNodes} values.`;
+    }
+    if (depth > VAULT_LIMITS.maxFrontmatterDepth) {
+      return `Frontmatter JSON must not exceed ${VAULT_LIMITS.maxFrontmatterDepth} levels.`;
+    }
+
+    if (value === null) {
+      const problem = addBytes(4);
+      if (problem) return problem;
+      continue;
+    }
+    if (typeof value === 'string') {
+      if (encoder.encode(value).byteLength > VAULT_LIMITS.maxFrontmatterBytes) {
+        return `Frontmatter JSON must not exceed ${VAULT_LIMITS.maxFrontmatterBytes} UTF-8 bytes.`;
+      }
+      const problem = addBytes(encoder.encode(JSON.stringify(value)).byteLength);
+      if (problem) return problem;
+      continue;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return 'Frontmatter must contain JSON-compatible values.';
+      const problem = addBytes(String(value).length);
+      if (problem) return problem;
+      continue;
+    }
+    if (typeof value === 'boolean') {
+      const problem = addBytes(value ? 4 : 5);
+      if (problem) return problem;
+      continue;
+    }
+    if (!value || typeof value !== 'object') return 'Frontmatter must contain JSON-compatible values.';
+    if (seen.has(value)) return 'Frontmatter must not contain circular or shared object references.';
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      const problem = addBytes(2 + Math.max(0, value.length - 1));
+      if (problem) return problem;
+      for (const item of value) stack.push({ value: item, depth: depth + 1 });
+      continue;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return 'Frontmatter must contain JSON-compatible values.';
+    }
+    const entries = Object.entries(value);
+    let problem = addBytes(2 + Math.max(0, entries.length - 1));
+    if (problem) return problem;
+    for (const [key, item] of entries) {
+      problem = addBytes(encoder.encode(JSON.stringify(key)).byteLength + 1);
+      if (problem) return problem;
+      stack.push({ value: item, depth: depth + 1 });
+    }
+  }
+  return undefined;
+}

@@ -59,11 +59,11 @@ Not supported:
 - historical LiveSync versions.
 
 All derived Markdown writes require the exact LiveSync revision returned by a
-read. `append_file` appends the supplied text verbatim. `patch_file` performs an
-exact replacement and rejects ambiguous matches unless `replaceAll` is
-explicitly true. Frontmatter tools operate on top-level YAML keys while
-preserving the Markdown body. Listings expose LiveSync metadata without reading
-every file body.
+read or successful write. `append_file` appends the supplied text verbatim.
+`patch_file` performs an exact replacement and rejects ambiguous matches unless
+`replaceAll` is explicitly true. Frontmatter tools operate on top-level YAML
+keys while preserving the Markdown body. Listings expose LiveSync metadata
+without reading every file body.
 
 ## Completed checkpoints
 

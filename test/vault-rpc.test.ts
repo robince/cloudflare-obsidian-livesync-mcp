@@ -67,6 +67,26 @@ describe('vault RPC', () => {
     expect(mismatched).toMatchObject({ ok: false, error: { code: 'invalid_input' } });
   });
 
+  it('omits invalid raw numeric metadata from public listings', async () => {
+    const { name, stub } = await seededVault('invalid-metadata');
+    await stub.putDocument(name, {
+      _id: 'invalid/metadata.md',
+      path: 'invalid/metadata.md',
+      type: 'plain',
+      datatype: 'plain',
+      children: [],
+      eden: {},
+      size: -1,
+      ctime: 1.5,
+      mtime: Number.MAX_SAFE_INTEGER + 1,
+    });
+
+    await expect(stub.listVaultFiles({ prefix: 'invalid/' })).resolves.toEqual({
+      ok: true,
+      data: { files: [{ path: 'invalid/metadata.md', revision: expect.any(String) }] },
+    });
+  });
+
   it('reads exact Markdown content and returns concise input and missing-file errors', async () => {
     const { stub } = await seededVault();
     const path = 'notes/unicode-雪.md';

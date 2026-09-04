@@ -118,8 +118,10 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
           path: z.string(),
           revision: z.string(),
           sizeBytes: z.number().int().nonnegative().optional(),
-          createdAt: z.number().int().nonnegative().optional(),
-          modifiedAt: z.number().int().nonnegative().optional(),
+          createdAt: z.number().int().nonnegative().optional()
+            .describe('Unix epoch time in milliseconds.'),
+          modifiedAt: z.number().int().nonnegative().optional()
+            .describe('Unix epoch time in milliseconds.'),
           unresolvedVersions: z.number().int().min(2).optional(),
         })),
         cursor: z.string().optional(),
@@ -156,8 +158,10 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
           revision: z.string(),
           mimeType: z.string(),
           sizeBytes: z.number().int().nonnegative().optional(),
-          createdAt: z.number().int().nonnegative().optional(),
-          modifiedAt: z.number().int().nonnegative().optional(),
+          createdAt: z.number().int().nonnegative().optional()
+            .describe('Unix epoch time in milliseconds.'),
+          modifiedAt: z.number().int().nonnegative().optional()
+            .describe('Unix epoch time in milliseconds.'),
           unresolvedVersions: z.number().int().min(2).optional(),
         })),
         cursor: z.string().optional(),

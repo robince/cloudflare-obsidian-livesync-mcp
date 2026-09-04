@@ -393,13 +393,17 @@ function failure(code: OrdinaryErrorCode, message: string): VaultResult<never> {
   return { ok: false, error: { code, message } };
 }
 
+function isNonnegativeSafeInteger(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 function toPublicFile(file: CommonlibFileMetadata) {
   return {
     path: file.path,
     revision: file.revision,
-    ...(file.size === undefined ? {} : { sizeBytes: file.size }),
-    ...(file.ctime === undefined ? {} : { createdAt: file.ctime }),
-    ...(file.mtime === undefined ? {} : { modifiedAt: file.mtime }),
+    ...(isNonnegativeSafeInteger(file.size) ? { sizeBytes: file.size } : {}),
+    ...(isNonnegativeSafeInteger(file.ctime) ? { createdAt: file.ctime } : {}),
+    ...(isNonnegativeSafeInteger(file.mtime) ? { modifiedAt: file.mtime } : {}),
     ...(file.unresolvedVersions === undefined ? {} : { unresolvedVersions: file.unresolvedVersions }),
   };
 }

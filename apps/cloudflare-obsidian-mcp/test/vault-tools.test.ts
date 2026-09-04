@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { VAULT_LIMITS } from '@cloudflare-obsidian-livesync/contracts';
 
 import { allowedGithubLogins, normalizeGithubLogin } from '../src/auth-utils';
 import {
@@ -97,6 +98,24 @@ describe('MCP vault surface', () => {
     }).success).toBe(false);
     expect(patchFrontmatterInput.safeParse({
       path: 'notes/a.md', updates: {}, expectedRevision: '1-a',
+    }).success).toBe(false);
+
+    expect(patchFrontmatterInput.safeParse({
+      path: 'notes/a.md',
+      updates: { large: 'x'.repeat(VAULT_LIMITS.maxFrontmatterBytes) },
+      expectedRevision: '1-a',
+    }).success).toBe(false);
+
+    let nested: Record<string, unknown> = { value: true };
+    for (let depth = 0; depth <= VAULT_LIMITS.maxFrontmatterDepth; depth++) nested = { nested };
+    expect(patchFrontmatterInput.safeParse({
+      path: 'notes/a.md', updates: nested, expectedRevision: '1-a',
+    }).success).toBe(false);
+
+    expect(patchFrontmatterInput.safeParse({
+      path: 'notes/a.md',
+      updates: { values: Array.from({ length: VAULT_LIMITS.maxFrontmatterNodes }, () => null) },
+      expectedRevision: '1-a',
     }).success).toBe(false);
   });
 
