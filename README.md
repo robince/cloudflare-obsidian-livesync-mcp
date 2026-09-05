@@ -10,7 +10,7 @@ database.
 Deploy your own `obsidian-sync` Worker, then connect Obsidian LiveSync to it.
 This setup needs no MCP Worker or GitHub OAuth app.
 
-You need Node.js **22.18 or later**, Git, a Cloudflare account, and access to this repository while it is private.
+You need Node.js **22.18.x–22.x or 24.11.0 and later**, Git, a Cloudflare account, and access to this repository while it is private.
 
 1. Clone the repository and install its dependencies:
 
@@ -145,6 +145,13 @@ and do not raise that Cloudflare limit.
 
 The default LiveSync chunking is comfortably within the limit. Large custom
 chunk-size values intended for a conventional CouchDB server are not compatible.
+
+## Backups
+
+Daily backups export the single configured vault to a private R2 bucket provisioned
+at deployment, with 30 daily, 8 weekly, and 24 monthly recovery points.
+See [backup and recovery](docs/backup-recovery.md) for configuration, offline vault
+extraction, and restore through LiveSync.
 
 ## Access from another Worker
 

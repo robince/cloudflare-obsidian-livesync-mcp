@@ -32,7 +32,12 @@
   },
   "vars": {
     "COUCHDB_USERNAME": "admin",
-    "CORS_ORIGINS": "app://obsidian.md,capacitor://localhost,http://localhost"
+    "CORS_ORIGINS": "app://obsidian.md,capacitor://localhost,http://localhost",
+    "BACKUP_DATABASE": "vault",
+    "BACKUP_ENABLED": "true",
+    "BACKUP_DAILY": "30",
+    "BACKUP_WEEKLY": "8",
+    "BACKUP_MONTHLY": "24"
   },
   "observability": {
     "enabled": true,
@@ -43,7 +48,12 @@
       "name": "obsidian-sync-dev",
       "vars": {
         "COUCHDB_USERNAME": "admin",
-        "CORS_ORIGINS": "app://obsidian.md,capacitor://localhost,http://localhost"
+        "CORS_ORIGINS": "app://obsidian.md,capacitor://localhost,http://localhost",
+        "BACKUP_DATABASE": "vault",
+        "BACKUP_ENABLED": "true",
+        "BACKUP_DAILY": "30",
+        "BACKUP_WEEKLY": "8",
+        "BACKUP_MONTHLY": "24"
       },
       "durable_objects": {
         "bindings": [
@@ -57,7 +67,27 @@
         "required": [
           "COUCHDB_PASSWORD"
         ]
+      },
+      "r2_buckets": [
+        {
+          "binding": "BACKUP_BUCKET"
+        }
+      ],
+      "triggers": {
+        "crons": [
+          "0 * * * *"
+        ]
       }
     }
+  },
+  "r2_buckets": [
+    {
+      "binding": "BACKUP_BUCKET"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 * * * *"
+    ]
   }
 }

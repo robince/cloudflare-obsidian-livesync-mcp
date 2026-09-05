@@ -1,3 +1,5 @@
+import { exportTables, importTables, verifyBackup, readManifest, directory, prune } from './backup/storage';
+import { fail, DATABASE_NAME, TABLES } from './backup/format';
 import type { GetVaultFileOutlineRequest, GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
 import { changesFeed, streamChanges, openRevisions, badRequest } from './changes-feed';
 import { chunkReferences } from './chunk-references';
@@ -70,6 +72,9 @@ interface FindRequest {
 }
 
 export class PouchDatabase extends DurableObject<Env> {
+  private backupJob = false;
+  private backupActive = false;
+  private restoreActive = false;
   private db?: AnyDatabase;
   private dbName?: string;
   private activeChangeLongpolls = 0;
@@ -105,6 +110,7 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   private exists(): boolean {
+    if (this.meta('restore_state')) return false;
     return this.meta('exists') === 'true';
   }
 
@@ -129,8 +135,104 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.db;
   }
 
+  async backupStatus() {
+    let state = JSON.parse(this.meta('backup_status') ?? '{}') as { lastAttempt?: string; lastSuccess?: string; error?: string; bytes?: number; id?: string; pendingId?: string };
+    // Recover a publication that succeeded just before the process stopped.
+    if (state.pendingId && !this.backupJob) {
+      try {
+        const manifest = await readManifest(this.env.BACKUP_BUCKET, this.dbName ?? this.env.BACKUP_DATABASE, state.pendingId);
+        state = { lastAttempt: state.lastAttempt, lastSuccess: manifest.createdAt, bytes: manifest.bytes, id: manifest.id };
+        this.setMeta('backup_status', JSON.stringify(state));
+      } catch (error) { if ((error as { status?: number }).status !== 404) throw error; }
+    }
+    return { ...state, running: this.backupJob, database: this.dbName ?? this.env.BACKUP_DATABASE,
+      overdue: !state.lastSuccess || Date.now() - Date.parse(state.lastSuccess) > 26 * 3600_000 };
+  }
+
+  async createBackup(name: string, scheduled = false) {
+    if (name !== this.env.BACKUP_DATABASE) fail('Only BACKUP_DATABASE can be backed up');
+    if (!this.env.BACKUP_BUCKET) fail('Backup bucket is not configured', 503);
+    if (this.backupActive || this.activeSemanticWrites || this.restoreActive) fail('Vault busy; retry backup later', 503);
+    const previous = await this.backupStatus();
+    if (scheduled && (new Date().getUTCHours() < 3 || previous.lastSuccess?.slice(0, 10) === new Date().toISOString().slice(0, 10))) return { skipped: true };
+    const policy = { daily: Number(this.env.BACKUP_DAILY), weekly: Number(this.env.BACKUP_WEEKLY), monthly: Number(this.env.BACKUP_MONTHLY) };
+    for (const n of Object.values(policy)) if (!Number.isSafeInteger(n) || n < 1 || n > 10000) fail('Invalid backup retention');
+    if (this.backupJob || this.backupActive || this.activeSemanticWrites || this.restoreActive) fail('Vault busy; retry backup later', 503);
+    this.backupJob = true;
+    this.backupActive = true;
+    const started = Date.now();
+    const state = { ...previous, lastAttempt: new Date(started).toISOString(), error: undefined as string | undefined };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    const check = () => { if (cancelled || Date.now() - started >= 60_000) fail('Backup exceeded 60-second write pause', 503); };
+    try {
+      this.setMeta('backup_status', JSON.stringify(state));
+      const exported = (async () => {
+        await this.mutationLifecycle;
+        check(); this.requireExists(); await this.database(name).info(); check();
+        return exportTables(this.ctx.storage.sql, this.env.BACKUP_BUCKET, name, check);
+      })();
+      const manifest = await Promise.race([exported, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => { cancelled = true; reject(Object.assign(new Error('Backup exceeded 60-second write pause'), { status: 503 })); }, 60_000);
+      })]);
+      check();
+      // All source rows are now immutable R2 parts. Publication and pruning need no write pause.
+      this.backupActive = false;
+      if (timer) clearTimeout(timer);
+      manifest.pauseMs = Date.now() - started;
+      state.pendingId = manifest.id;
+      this.setMeta('backup_status', JSON.stringify(state));
+      await this.env.BACKUP_BUCKET.put(`${directory(name, manifest.id)}manifest.json`, JSON.stringify(manifest));
+      this.setMeta('backup_status', JSON.stringify({ lastAttempt: state.lastAttempt, lastSuccess: manifest.createdAt, bytes: manifest.bytes, id: manifest.id }));
+      console.log(JSON.stringify({ message: 'backup completed', id: manifest.id, bytes: manifest.bytes, pauseMs: manifest.pauseMs }));
+      try { await prune(this.env.BACKUP_BUCKET, name, policy); }
+      catch { this.setMeta('backup_status', JSON.stringify({ lastAttempt: state.lastAttempt, lastSuccess: manifest.createdAt, bytes: manifest.bytes, id: manifest.id, error: 'Backup completed but retention cleanup failed' })); }
+      return manifest;
+    } catch (error) {
+      this.setMeta('backup_status', JSON.stringify({ ...state, error: error instanceof Error ? error.message : 'Backup failed' }));
+      console.error(JSON.stringify({ message: 'backup failed' }));
+      throw error;
+    } finally { cancelled = true; if (timer) clearTimeout(timer); this.backupActive = false; this.backupJob = false; }
+  }
+
+  async restoreBackup(target: string, source: string, id: string, restart = false) {
+    if (!DATABASE_NAME.test(target) || target === source) fail('Restore requires a fresh database name');
+    if (this.restoreActive || this.backupActive || this.activeSemanticWrites) fail('Target busy', 409);
+    if (this.dbName && !this.meta('restore_state')) fail('Target database already exists', 409);
+    if (this.dbName && this.dbName !== target) fail('Target identity mismatch', 409);
+    if (this.meta('restore_state') && !restart) fail('Incomplete restore; explicitly restart it', 409);
+    this.restoreActive = true;
+    try {
+      this.setMeta('restore_state', 'importing');
+      await this.mutationLifecycle;
+      const manifest = await readManifest(this.env.BACKUP_BUCKET, source, id);
+      await verifyBackup(this.env.BACKUP_BUCKET, manifest);
+      if (this.db) { await this.db.close(); this.db = undefined; }
+      this.ctx.storage.transactionSync(() => {
+        for (const table of Object.keys(TABLES)) if (table !== 'sqlite_sequence') this.ctx.storage.sql.exec(`DROP TABLE IF EXISTS "${table}"`);
+      });
+      const db = this.database(target);
+      await db.info();
+      await db.close(); this.db = undefined;
+      await importTables(this.ctx.storage, this.env.BACKUP_BUCKET, manifest);
+      const restored = this.database(target);
+      const milestoneId = MILESTONE_DOCUMENT_ID;
+      let milestone: JsonObject;
+      try { milestone = await restored.get(milestoneId); }
+      catch (error) { if (!isMissingDocument(error)) throw error; fail('Backup has no LiveSync milestone'); }
+      await restored.put({ ...milestone, locked: true, cleaned: false, accepted_nodes: [] });
+      await restored.info();
+      this.ctx.storage.transactionSync(() => {
+        this.setMeta('exists', 'true');
+        this.ctx.storage.sql.exec("DELETE FROM cloudflare_pouchdb_meta WHERE key='restore_state'");
+      });
+      return { ok: true, database: target, backup: id, requiresLiveSyncReset: true };
+    } catch (error) { this.setMeta('restore_state', 'failed'); throw error; }
+    finally { this.restoreActive = false; }
+  }
+
   async ensureDatabase(name: string): Promise<void> {
-    await this.withMutation(async () => { this.database(name); this.setMeta('exists', 'true'); });
+    await this.withMutation(async () => { if (this.meta('restore_state')) fail('Restore target unavailable', 503); this.database(name); this.setMeta('exists', 'true'); });
   }
 
   async getDocument(name: string, id: string, options: PouchDB.Core.GetOptions = {}): Promise<JsonObject> {
@@ -244,17 +346,22 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   private async withSemanticWrite<T>(operation: () => Promise<VaultResult<T>>): Promise<VaultResult<T>> {
+    if (this.backupActive || this.meta('restore_state')) return { ok: false, error: { code: 'unavailable', message: 'Vault backup or restore maintenance is in progress. Retry later.' } };
     if (this.maintenanceActive) return { ok: false, error: { code: 'unavailable', message: 'Vault maintenance is in progress. Retry after maintenance completes.' } };
     this.activeSemanticWrites++;
     try { return await operation(); } finally { this.activeSemanticWrites--; }
   }
 
   private async withMutation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.backupActive || this.meta('restore_state')) fail('Vault maintenance; retry later', 503);
     const previous = this.mutationLifecycle;
     let release!: () => void;
     this.mutationLifecycle = new Promise<void>((resolve) => { release = resolve; });
     await previous;
-    try { return await operation(); } finally { release(); }
+    try {
+      if (this.backupActive || this.meta('restore_state')) fail('Vault maintenance; retry later', 503);
+      return await operation();
+    } finally { release(); }
   }
 
   private async withSearchLifecycle<T>(operation: () => Promise<T>): Promise<T> {
@@ -304,6 +411,7 @@ export class PouchDatabase extends DurableObject<Env> {
     const name = request.headers.get('x-pouchdb-database');
     if (!name) return couchError(400, 'bad_request', 'database name is required');
     try {
+      if (this.meta('restore_state')) fail('Restore target unavailable', 503);
       const parts = new URL(request.url).pathname.split('/').filter(Boolean).map(decodeURIComponent);
       const first = parts[0];
       const readPost = ['_changes', '_all_docs', '_bulk_get', '_revs_diff', '_find', '_index', '_ensure_full_commit'].includes(first ?? '');

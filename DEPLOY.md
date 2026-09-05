@@ -10,7 +10,7 @@ Cloudflare's Deploy to Cloudflare button supports public repositories only. If
 you have been added as a collaborator while this repository is private, deploy
 with Wrangler instead:
 
-1. Install Node.js 22 or later and clone the repository.
+1. Install Node.js 22.18.x–22.x or 24.11.0 and later and clone the repository.
 
    ```sh
    git clone git@github.com:robince/cloudflare-obsidian-livesync.git
@@ -36,7 +36,7 @@ with Wrangler instead:
    ```
 
 Wrangler opens Cloudflare authentication in a browser. On success, it provisions
-the SQLite Durable Object, applies its migration, uploads `COUCHDB_PASSWORD` as
+the SQLite Durable Object and private backup R2 bucket, applies its migration, uploads `COUCHDB_PASSWORD` as
 an encrypted Worker secret, and prints the deployed `workers.dev` URL.
 
 You do not need to create a Cloudflare API token or copy an account ID, database
@@ -69,6 +69,15 @@ To change the password after deployment, run:
 ```sh
 npx wrangler secret put COUCHDB_PASSWORD --config wrangler.deploy.jsonc
 ```
+
+## Vault backups
+
+Set `BACKUP_DATABASE` in the storage deployment configuration to the same database
+name used in LiveSync (default `vault`). The deployment provisions a private R2
+bucket and hourly scheduling check automatically. From 03:00 UTC it creates one
+successful daily backup, retaining 30 daily, 8 weekly, and 24 monthly points.
+R2 must be enabled on your account. See [backup and recovery](docs/backup-recovery.md)
+for upgrades, operator commands, costs, and the LiveSync client reset procedure.
 
 ## Connect Obsidian LiveSync
 
@@ -125,16 +134,24 @@ explicitly select the top-level configuration (`--env ""`); dev commands select
 `env.dev`. Do not pass `--env` to the aggregate npm scripts.
 
 Wrangler does not inherit variables or resource bindings into named environments.
-Keep the complete dev `vars`, Durable Object bindings, and OAuth KV
+Keep the complete dev `vars`, Durable Object bindings, backup R2 binding, and OAuth KV
 bindings in `env.dev`. Dev MCP must point at dev storage through
 `POUCH_DATABASES.script_name`. Use separate KV namespaces for each
 environment; retain provisioned IDs in the corresponding configuration.
+Dev storage provisions its own private backup bucket. Set `BACKUP_DATABASE`
+independently for each environment; do not point both environments at one bucket.
 
 Configure each MCP environment's public URL, vault database, allowed user IDs,
 and write setting. Register a separate GitHub OAuth app for dev, with its own
 client ID, secret, and callback URL. Default MCP remains optional.
 
-For first dev deployment, create ignored `.dev.vars.dev` files at each Worker
+Before the first dev deployment, create any missing deployment copies using
+`cp -n wrangler.jsonc wrangler.deploy.jsonc` and, if MCP is wanted,
+`cp -n apps/cloudflare-obsidian-mcp/wrangler.jsonc apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc`.
+For existing copies, carry the template's `env.dev` block into each copy and edit
+its account-specific values. Do not overwrite existing deployment configuration.
+
+Create ignored `.dev.vars.dev` files at each Worker
 root from the corresponding `.dev.vars.example`, then run:
 
 ```sh
