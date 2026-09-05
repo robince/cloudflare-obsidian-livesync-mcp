@@ -15,15 +15,20 @@
   },
   "kv_namespaces": [
     {
-      "binding": "OAUTH_KV",
-      "preview_id": "00000000000000000000000000000000"
+      "binding": "OAUTH_KV"
     }
   ],
+  "secrets": {
+    "required": [
+      "GITHUB_CLIENT_SECRET"
+    ]
+  },
   "vars": {
     "VAULT_DATABASE": "replace-me",
     "MCP_PUBLIC_BASE_URL": "https://replace-me.example.com",
     "MCP_WRITES_ENABLED": "false",
-    "GITHUB_ALLOWED_LOGINS": ""
+    "GITHUB_ALLOWED_LOGINS": "",
+    "GITHUB_CLIENT_ID": ""
   },
   "observability": {
     "enabled": true,

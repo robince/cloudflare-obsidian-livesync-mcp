@@ -9,6 +9,9 @@ coverage/
 # Cloudflare local state
 .wrangler/
 
+# Deployment-specific configuration (at each Worker root)
+wrangler.deploy.jsonc
+
 # Local environment variables and secrets
 .dev.vars
 .dev.vars.*
