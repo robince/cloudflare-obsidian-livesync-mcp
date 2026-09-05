@@ -50,7 +50,7 @@ export function createSanitizer(start) {
     }
     const status = workers.event?.response?.status ?? raw.event?.response?.status ?? metadata.statusCode;
     const outcome = workers.outcome ?? raw.outcome;
-    const exceptions = Array.isArray(raw.exceptions) && raw.exceptions.length > 0;
+    const exceptions = (Array.isArray(raw.exceptions) && raw.exceptions.length > 0) || Object.hasOwn(parsed(raw.source), 'exception');
     const unknownLogError = typeof metadata.error === 'string' || (raw.level ?? metadata.level) === 'error' || (Array.isArray(raw.logs) && raw.logs.some(l => object(l).level === 'error'));
     if (exceptions || unknownLogError || (typeof outcome === 'string' && outcome !== 'ok') || (Number.isInteger(status) && status >= 400 && status <= 599)) {
       const event = { ...base, event:'platform_error', operation:'unknown', severity:'error', outcome:member(outcome,OUTCOMES), category: exceptions || (outcome && outcome !== 'ok') ? 'runtime' : status >= 400 ? 'http' : 'application' };

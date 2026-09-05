@@ -89,3 +89,64 @@ test('live capture terminates children and sanitizes fragmented events',async()=
  const sources=await capture([{name:'sync',role:'storage'}],'a',.03,createSanitizer(0),events,spawn);
  assert.equal(killed,true);assert.equal(events.length,1);assert.equal(sources.logs_storage.status,'collected');assert.ok(!JSON.stringify(events).includes(secret));
 });
+
+test('historical source exceptions retain only safe failure metadata',()=>{
+ for(const source of [{exception:{message:secret,stack:secret}},JSON.stringify({exception:secret})]) {
+  const events=createSanitizer(0)({timestamp:100,source},'storage');
+  assert.equal(events.length,1);assert.equal(events[0].event,'platform_error');
+  assert.equal(events[0].category,'runtime');assert.ok(!JSON.stringify(events).includes(secret));
+ }
+});
+test('duplicate Worker names and normalized calendar dates are rejected',()=>{
+ assert.throws(()=>options(['report','--storage-worker','sync','--mcp-worker','sync']),/worker_names_must_differ/);
+ const args=['report','--storage-worker','sync','--from','2026-02-30T00:00:00Z','--to','2026-03-03T00:00:00Z'];
+ assert.throws(()=>options(args,Date.parse('2026-03-04T00:00:00Z')),/invalid_calendar_date/);
+ assert.equal(options(['report','--storage-worker','sync','--from','2026-03-01T00:00:00.123Z','--to','2026-03-02T00:00:00Z'],Date.parse('2026-03-04T00:00:00Z')).start,Date.parse('2026-03-01T00:00:00.123Z'));
+});
+test('API request budget counts retry attempts',async()=>{
+ let calls=0;
+ const api=apiClient({},async()=>{calls++;return calls>=250?new Response('',{status:503}):Response.json({result:[]})});
+ for(let i=0;i<249;i++)await api('/test');
+ await assert.rejects(api('/test'),/collection_request_or_time_limit/);
+ assert.equal(calls,250);
+});
+test('API deadline is checked before retrying',async t=>{
+ let now=0,calls=0;t.mock.method(Date,'now',()=>now);
+ const api=apiClient({},async()=>{calls++;now=600000;return new Response('',{status:503})});
+ await assert.rejects(api('/test'),/collection_request_or_time_limit/);
+ assert.equal(calls,1);
+});
+for(const mode of ['parser','event_limit'])test(`two-Worker capture marks peers partial after ${mode} failure`,async()=>{
+ const {capture}=await import('../scripts/diagnostics.mjs');
+ const {EventEmitter}=await import('node:events');const {PassThrough}=await import('node:stream');
+ const children=[],events=mode==='event_limit'?Array(49999).fill({}):[];
+ const spawn=()=>{
+  const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();
+  child.kill=signal=>{child.stdout.end();queueMicrotask(()=>child.emit('close',null,signal));return true};
+  children.push(child);
+  if(children.length===2)queueMicrotask(()=>{
+   children[1].stdout.write(JSON.stringify({timestamp:1,message:{event:'operation_end',operation:'request',outcome:'success'}}));
+   children[0].stdout.write(mode==='parser'?'invalid':JSON.stringify({timestamp:2,message:{event:'operation_end',operation:'request',outcome:'success'}}));
+  });
+  return child;
+ };
+ const sources=await capture([{name:'sync',role:'storage'},{name:'mcp',role:'mcp'}],'a',30,createSanitizer(0),events,spawn);
+ assert.equal(sources.logs_storage.status,'partial');assert.equal(sources.logs_mcp.status,'partial');
+ assert.equal(sources.logs_mcp.reason,'tail_json_or_event_limit');
+});
+test('live capture window and offsets exclude authentication setup',async t=>{
+ const {main}=await import('../scripts/diagnostics.mjs');
+ const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const root=await mkdtemp(join(tmpdir(),'diagnostics-test-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ let now=Date.parse('2026-09-05T00:00:00Z');t.mock.method(Date,'now',()=>now);
+ const result=await main(['capture','--storage-worker','sync','--account-id','a'.repeat(32),'--out',join(root,'bundle')],{
+  authenticate:async()=>{now+=60000;return {}},
+  captureTail:async(_workers,_account,_duration,sanitize,events)=>{
+   now+=2000;events.push(...sanitize({timestamp:now,message:{event:'operation_end',operation:'request',outcome:'success'}},'storage'));
+   return {logs_storage:{status:'collected'}};
+  },
+ });
+ assert.equal(result.manifest.from,'2026-09-05T00:01:00.000Z');
+ assert.equal(Date.parse(result.manifest.to)-Date.parse(result.manifest.from),2000);
+ assert.equal(result.events[0].offsetMs,2000);
+});

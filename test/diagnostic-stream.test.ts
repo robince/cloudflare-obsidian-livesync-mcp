@@ -26,4 +26,6 @@ it('route classification never returns identifiers or inherited properties', () 
   expect(operationFor('/private.md','GET')).toBe('document_read');
   expect(operationFor('/constructor','GET')).toBe('document_read');
   expect(operationFor('/_changes','GET')).toBe('changes');
+  expect(operationFor('/%5Fchanges','GET')).toBe('changes');
+  expect(operationFor('/%E0%A4','GET')).toBe('request');
 });
