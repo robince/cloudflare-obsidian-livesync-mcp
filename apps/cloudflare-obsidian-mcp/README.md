@@ -52,6 +52,12 @@ Worker. This does not change the CouchDB replication protocol.
 
 ## Deployment configuration
 
+The default Worker is `obsidian-mcp`; `env.dev` defaults to `obsidian-mcp-dev`.
+Configure each environment separately in the ignored deployment copy. See
+[default and development deployments](../../DEPLOY.md#default-and-development-deployments)
+for commands, separate secrets, and preserving existing dev installations.
+
+
 Copy `wrangler.jsonc` to the ignored `wrangler.deploy.jsonc` beside it. Keep
 portable defaults in the committed file and put these non-secret settings in
 the deployment copy's `vars`:
@@ -82,10 +88,10 @@ the current runtime allowlist.
 
 Wrangler automatically creates and binds the `OAUTH_KV` namespace on the first
 deployment. The Worker also needs the cross-script `POUCH_DATABASES` Durable
-Object binding targeting the unchanged `cloudflare-pouchdb` Worker.
+Object binding targeting the matching `obsidian-sync` Worker (or the configured dev storage name).
 
 For a workers.dev deployment, reuse the account subdomain from the existing
-storage URL: `https://cloudflare-obsidian-mcp.<account-subdomain>.workers.dev`.
+storage URL: `https://obsidian-mcp.<account-subdomain>.workers.dev`.
 Set the URL and register the GitHub OAuth app before deploying MCP.
 
 Copy `.dev.vars.example` to `.dev.vars` in this directory and fill in only the

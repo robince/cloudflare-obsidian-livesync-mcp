@@ -44,14 +44,17 @@ ID, or Durable Object ID.
 
 ## Deploy from a public repository
 
-If this repository becomes public, use the button below. Cloudflare will copy
-the repository to your GitHub account, prompt for the required password, and
-deploy it with Workers Builds.
+The current button targets the root storage Worker. It cannot configure and
+deploy the optional MCP workspace at the same time. Cloudflare detects the
+`deploy` script, but that script requires the ignored deployment configurations;
+a fresh button deployment must override the deploy command with
+`npx wrangler deploy --env ""` to use the committed storage template.
+It presents the storage variables and password, not the MCP OAuth settings.
+Use the Wrangler instructions below for MCP.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/robince/cloudflare-obsidian-livesync)
 
-The button will not work while the source repository is private, even for an
-invited collaborator.
+The source repository must be public for the button to work.
 
 ## Configuration
 
@@ -101,13 +104,65 @@ For automated deployment, supply the deployment file to the build environment
 before running the deploy scripts. Do not commit account-specific values merely
 to make a Git-based build work.
 
+## Default and development deployments
+
+The default Workers are `obsidian-sync` and `obsidian-mcp`, with no production
+suffix. Each configuration also defines an optional `env.dev` for
+`obsidian-sync-dev` and `obsidian-mcp-dev`. One checkout supports both.
+
+| Command | Target |
+| --- | --- |
+| `npm run deploy` | Both default Workers, storage first |
+| `npm run deploy:storage` | Default storage only |
+| `npm run deploy:mcp` | Default MCP only |
+| `npm run deploy:dev` | Both dev Workers, storage first |
+| `npm run deploy:storage:dev` | Dev storage only |
+| `npm run deploy:mcp:dev` | Dev MCP only |
+
+All of these commands use the ignored deployment copies. Default commands
+explicitly select the top-level configuration (`--env ""`); dev commands select
+`--env dev`. Configure default values at the top level and dev values under
+`env.dev`. Do not pass `--env` to the aggregate npm scripts.
+
+Wrangler does not inherit variables or resource bindings into named environments.
+Keep the complete dev `vars`, Durable Object bindings, and OAuth KV
+bindings in `env.dev`. Dev MCP must point at dev storage through
+`POUCH_DATABASES.script_name`. Use separate KV namespaces for each
+environment; retain provisioned IDs in the corresponding configuration.
+
+Configure each MCP environment's public URL, vault database, allowed user IDs,
+and write setting. Register a separate GitHub OAuth app for dev, with its own
+client ID, secret, and callback URL. Default MCP remains optional.
+
+For first dev deployment, create ignored `.dev.vars.dev` files at each Worker
+root from the corresponding `.dev.vars.example`, then run:
+
+```sh
+npm run deploy:storage:dev -- --secrets-file .dev.vars.dev
+npm run deploy:mcp:dev -- --secrets-file apps/cloudflare-obsidian-mcp/.dev.vars.dev
+```
+
+These files are not uploaded automatically: `--secrets-file` installs their
+secrets on the selected Worker. Later deployments preserve the installed secrets.
+To update one interactively, include both the config and environment:
+
+```sh
+npx wrangler secret put COUCHDB_PASSWORD --config wrangler.deploy.jsonc --env dev
+```
+
+Existing deployments should retain their current Worker names, resource IDs,
+URLs, and cross-Worker binding targets in `env.dev` if they are now your dev
+installation. A new Worker name creates separate Durable Object storage; it does
+not rename or copy the old vault. Set up the new default vault through LiveSync.
+Do not overwrite existing deployment files by copying the templates again.
+
 ## Deploy the MCP Worker
 
 The MCP Worker connects directly to the storage Worker's Durable Object. It
 does not need the CouchDB URL or password. Before its first deployment:
 
 1. Reuse the account subdomain from the existing storage Worker URL. The MCP
-   origin is `https://cloudflare-obsidian-mcp.<account-subdomain>.workers.dev`.
+   origin is `https://obsidian-mcp.<account-subdomain>.workers.dev`.
    Register a GitHub OAuth app with this homepage and the same origin plus
    `/oauth/github/callback` as its callback URL.
 2. Create the local deployment configuration:

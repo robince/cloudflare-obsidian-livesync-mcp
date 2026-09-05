@@ -1,15 +1,18 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "cloudflare-obsidian-mcp",
+  "name": "obsidian-mcp",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-30",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
   "durable_objects": {
     "bindings": [
       {
         "name": "POUCH_DATABASES",
         "class_name": "PouchDatabase",
-        "script_name": "cloudflare-pouchdb"
+        "script_name": "obsidian-sync"
       }
     ]
   },
@@ -33,5 +36,36 @@
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
+  },
+  "env": {
+    "dev": {
+      "name": "obsidian-mcp-dev",
+      "vars": {
+        "VAULT_DATABASE": "replace-me",
+        "MCP_PUBLIC_BASE_URL": "https://replace-me.example.com",
+        "MCP_WRITES_ENABLED": "false",
+        "GITHUB_ALLOWED_USER_IDS": "",
+        "GITHUB_CLIENT_ID": ""
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "POUCH_DATABASES",
+            "class_name": "PouchDatabase",
+            "script_name": "obsidian-sync-dev"
+          }
+        ]
+      },
+      "kv_namespaces": [
+        {
+          "binding": "OAUTH_KV"
+        }
+      ],
+      "secrets": {
+        "required": [
+          "GITHUB_CLIENT_SECRET"
+        ]
+      }
+    }
   }
 }
