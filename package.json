@@ -25,8 +25,8 @@
     "check": "npm run check:dependencies && npm run check:storage && npm run check --workspaces --if-present",
     "check:dependencies": "node --test test/production-dependencies.test.mjs && node scripts/check-production-dependencies.mjs",
     "check:storage": "tsc --noEmit",
-    "test": "npm run test:dependencies && vitest run test/worker.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts test/vault-conflicts.test.ts && vitest run test/mcp-storage-integration.test.ts",
-    "test:dependencies": "node --test test/production-dependencies.test.mjs",
+    "test": "npm run test:dependencies && vitest run test/worker.test.ts test/backup.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts test/vault-conflicts.test.ts && vitest run test/mcp-storage-integration.test.ts",
+    "test:dependencies": "node --test test/production-dependencies.test.mjs && node --experimental-strip-types --test test/backup-cli.test.mjs",
     "fixture:livesync": "node scripts/generate-livesync-fixture.mjs",
     "test:current-pouchdb": "vitest run test/current-pouchdb.test.ts",
     "test:all": "npm test && npm run test --workspaces --if-present && npm run test:staging-config",
@@ -40,7 +40,9 @@
     "deploy:storage": "wrangler deploy --config wrangler.deploy.jsonc",
     "deploy:mcp": "wrangler deploy --config apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc",
     "dry-run": "npm run dry-run:storage && npm run dry-run --workspaces --if-present",
-    "dry-run:storage": "wrangler deploy --dry-run --outdir dist/storage"
+    "dry-run:storage": "wrangler deploy --dry-run --outdir dist/storage",
+    "backup": "node --experimental-strip-types scripts/backup.mjs",
+    "test:backup": "vitest run test/backup.test.ts && node --experimental-strip-types --test test/backup-cli.test.mjs"
   },
   "dependencies": {
     "@cloudflare-obsidian-livesync/contracts": "workspace:*",
@@ -64,6 +66,9 @@
     "pouchdb-mapreduce": "^9.0.0",
     "typescript": "^5.9.2",
     "vitest": "^4.1.0",
-    "wrangler": "^4.33.1"
+    "wrangler": "^4.45.0"
+  },
+  "engines": {
+    "node": ">=22.18.0"
   }
 }

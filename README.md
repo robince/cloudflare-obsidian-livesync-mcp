@@ -85,6 +85,13 @@ and do not raise that Cloudflare limit.
 The default LiveSync chunking is comfortably within the limit. Large custom
 chunk-size values intended for a conventional CouchDB server are not compatible.
 
+## Backups
+
+Daily backups export the single configured vault to a private R2 bucket provisioned
+at deployment, with 30 daily, 8 weekly, and 24 monthly recovery points.
+See [backup and recovery](docs/backup-recovery.md) for configuration, offline vault
+extraction, and restore through LiveSync.
+
 ## Access from another Worker
 
 Bind the existing Durable Object class from another Worker:

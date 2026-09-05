@@ -8,7 +8,7 @@ export function json(data: unknown, init: ResponseInit = {}): Response {
 }
 
 export function couchError(status: number, error: string, reason: string): Response {
-  return json({ error, reason } satisfies CouchErrorBody, { status });
+  return json({ error, reason } satisfies CouchErrorBody, { status, headers: status === 503 ? { 'retry-after': '60' } : undefined });
 }
 
 export function pouchError(error: unknown): Response {

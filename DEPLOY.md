@@ -10,7 +10,7 @@ Cloudflare's Deploy to Cloudflare button supports public repositories only. If
 you have been added as a collaborator while this repository is private, deploy
 with Wrangler instead:
 
-1. Install Node.js 22 or later and clone the repository.
+1. Install Node.js 22.18 or later and clone the repository.
 
    ```sh
    git clone git@github.com:robince/cloudflare-obsidian-livesync.git
@@ -36,7 +36,7 @@ with Wrangler instead:
    ```
 
 Wrangler opens Cloudflare authentication in a browser. On success, it provisions
-the SQLite Durable Object, applies its migration, uploads `COUCHDB_PASSWORD` as
+the SQLite Durable Object and private backup R2 bucket, applies its migration, uploads `COUCHDB_PASSWORD` as
 an encrypted Worker secret, and prints the deployed `workers.dev` URL.
 
 You do not need to create a Cloudflare API token or copy an account ID, database
@@ -66,6 +66,15 @@ To change the password after deployment, run:
 ```sh
 npx wrangler secret put COUCHDB_PASSWORD --config wrangler.deploy.jsonc
 ```
+
+## Vault backups
+
+Set `BACKUP_DATABASE` in the storage deployment configuration to the same database
+name used in LiveSync (default `vault`). The deployment provisions a private R2
+bucket and hourly scheduling check automatically. From 03:00 UTC it creates one
+successful daily backup, retaining 30 daily, 8 weekly, and 24 monthly points.
+R2 must be enabled on your account. See [backup and recovery](docs/backup-recovery.md)
+for upgrades, operator commands, costs, and the LiveSync client reset procedure.
 
 ## Connect Obsidian LiveSync
 

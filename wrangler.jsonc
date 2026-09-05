@@ -6,24 +6,51 @@
     "octagonal-wheels/hash/xxhash.js": "./src/livesync-vault/worker-xxhash.ts"
   },
   "compatibility_date": "2026-08-26",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "durable_objects": {
     "bindings": [
-      { "name": "POUCH_DATABASES", "class_name": "PouchDatabase" }
+      {
+        "name": "POUCH_DATABASES",
+        "class_name": "PouchDatabase"
+      }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["PouchDatabase"] }
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "PouchDatabase"
+      ]
+    }
   ],
   "secrets": {
-    "required": ["COUCHDB_PASSWORD"]
+    "required": [
+      "COUCHDB_PASSWORD"
+    ]
   },
   "vars": {
     "COUCHDB_USERNAME": "admin",
-    "CORS_ORIGINS": "app://obsidian.md,capacitor://localhost,http://localhost"
+    "CORS_ORIGINS": "app://obsidian.md,capacitor://localhost,http://localhost",
+    "BACKUP_DATABASE": "vault",
+    "BACKUP_ENABLED": "true",
+    "BACKUP_DAILY": "30",
+    "BACKUP_WEEKLY": "8",
+    "BACKUP_MONTHLY": "24"
   },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
+  },
+  "r2_buckets": [
+    {
+      "binding": "BACKUP_BUCKET"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 * * * *"
+    ]
   }
 }
