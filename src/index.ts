@@ -1,3 +1,4 @@
+import { backupRoute } from './backup/routes';
 import { authenticate } from './auth';
 import { couchError, json, readJson } from './http';
 import { PouchDatabase } from './pouch-database';
@@ -8,6 +9,11 @@ export { PouchDatabase };
 const DATABASE_NAME = /^[a-z][a-z0-9_$()+-]*$/;
 
 export default {
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    if (env.BACKUP_ENABLED !== 'true') return;
+    if (!DATABASE_NAME.test(env.BACKUP_DATABASE)) throw new Error('Invalid BACKUP_DATABASE');
+    await env.POUCH_DATABASES.getByName(env.BACKUP_DATABASE).createBackup(env.BACKUP_DATABASE, true);
+  },
   async fetch(request: Request, baseEnv: Env): Promise<Response> {
     const env = baseEnv as AppEnv;
     const origin = request.headers.get('origin');
@@ -31,6 +37,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 async function routeAuthenticated(request: Request, url: URL, env: AppEnv): Promise<Response> {
+  if (url.pathname === '/_backup' || url.pathname.startsWith('/_backup/')) return backupRoute(request, env);
   if (url.pathname === '/') {
     return json({
       couchdb: 'Welcome',

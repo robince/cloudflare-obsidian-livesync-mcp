@@ -36,9 +36,11 @@ guarded MCP writes retain their current behaviour.
   difference between live and periodic sync. Report quota exhaustion clearly.
 - Add search progress and missing-chunk diagnostics; avoid requiring blind
   retries when an orphaned note blocks the index.
-- Write and test backup/export and restore instructions, including reconnecting
-  clients with existing revisions and checkpoints. Platform recovery alone is
-  not an end-to-end LiveSync recovery procedure.
+- Completed 2026-09-05: single-vault daily R2 backups with 30/8/24 retention,
+  offline extraction, fresh-database restore, and two stale LiveSync clients
+  recovered through the existing reset flow, including interrupted fetch and
+  checkpoints. See the [recovery runbook](backup-recovery.md) and
+  [staging results and measured limits](backup-staging-results.md).
 
 Exit: a reproducible free-tier setup with measured limits and a tested recovery
 path. Do not promise that every vault or initial import fits the free tier.
