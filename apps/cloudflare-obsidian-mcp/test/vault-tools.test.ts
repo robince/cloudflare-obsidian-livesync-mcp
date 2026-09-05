@@ -351,7 +351,8 @@ describe('MCP result and query contracts', () => {
     const server = createVaultMcpServer(fakeRpc, { writesEnabled: true, canRead: () => true, canWrite: () => true });
     const tools = (server as unknown as { _registeredTools: Record<string, { annotations: object }> })._registeredTools;
     expect(tools.get_file_outline.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
-    expect(tools.create_file.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
+    expect(tools.create_file.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    expect(tools.append_file.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
     expect(tools.edit_file.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
   });
 

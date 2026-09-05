@@ -261,3 +261,29 @@ items can still fit. Retry omissions with `read_file` or narrower ranges.
 Each whole note still has the existing 512,000-byte reconstruction limit.
 Batching reduces client round trips, not storage work. This additive MCP tool
 reuses contract 5 single-file RPC; no storage contract upgrade is required.
+
+## Tool execution diagnostics
+
+Each registered tool handler logs `mcp_tool_start` and `mcp_tool_end` with a
+shared generated `requestId` and tool name. Completion records include
+`durationMs`, `outcome` (`success`, `partial`, `error`, or `exception`), and
+allowlisted vault error codes. Batch reads also include item/failure counts;
+omitted reads count as incomplete. Logs exclude arguments, paths, note content,
+credentials, and error messages.
+
+These durations measure handler execution, not OAuth, schema validation, network
+transit, or ChatGPT reasoning/approval time. Requests blocked before reaching
+the handler produce no tool-start record; absence alone does not prove a safety
+block. Compare these records with the surrounding Worker request logs.
+
+`create_file` and `append_file` are additive writes (`destructiveHint: false`),
+not read-only or idempotent. Replacement, patching, and deletion remain marked
+destructive. These hints describe behavior; ChatGPT still controls approvals.
+
+## Note titles
+
+The filename without `.md` serves as the note title. Server instructions and
+`create_file` describe the writing convention: omit a duplicate H1 (`# Title`)
+in newly authored content unless explicitly requested, and use `##` for sections
+when needed. Copies and unrelated edits preserve existing headings. This is
+model guidance; the server does not strip headings from supplied content.
