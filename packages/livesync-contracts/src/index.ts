@@ -56,12 +56,6 @@ export const vaultErrorSchema = z.discriminatedUnion('code', [
   }),
 ]);
 
-export const vaultResultSchema = <T extends z.ZodType>(data: T) =>
-  z.discriminatedUnion('ok', [
-    z.object({ ok: z.literal(true), data }),
-    z.object({ ok: z.literal(false), error: vaultErrorSchema }),
-  ]);
-
 export type VaultErrorCode = z.infer<typeof vaultErrorCodeSchema>;
 export type VaultError = z.infer<typeof vaultErrorSchema>;
 export type VaultResult<T> =
@@ -176,10 +170,6 @@ export type PatchVaultFileData = z.infer<typeof patchVaultFileDataSchema>;
 export const readVaultFrontmatterRequestSchema = readVaultFileRequestSchema;
 export type ReadVaultFrontmatterRequest = ReadVaultFileRequest;
 
-export const jsonValueSchema: z.ZodType<unknown> = z.json().superRefine((value, context) => {
-  const problem = boundedJsonProblem(value);
-  if (problem) context.addIssue({ code: 'custom', message: problem });
-});
 export const frontmatterSchema: z.ZodType<Record<string, unknown>> = z.record(
   z.string().min(1).max(256),
   z.json(),

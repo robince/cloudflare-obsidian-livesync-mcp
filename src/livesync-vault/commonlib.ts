@@ -11,7 +11,6 @@ import type { VaultProfileInspection } from './profile';
 import { VAULT_LIMITS } from '@cloudflare-obsidian-livesync/contracts';
 import { livesyncConflict, reconciledConflict, throwVaultError } from './conflicts';
 
-export const COMMONLIB_VERSION = '0.1.19';
 const MAX_SEARCH_CHUNKS = 1_024;
 
 type CommonlibPath = Parameters<DirectFileManipulator['get']>[0];
@@ -272,11 +271,6 @@ export class CommonlibFacade {
       if (isConflict(error) || isMissing(error)) return false;
       throw error;
     }
-  }
-
-  async documentId(path: string): Promise<string> {
-    await this.ready();
-    return this.manipulator.path2id(path as CommonlibPath);
   }
 
   /** Metadata only: never resolves a conflict on a read/list path. */
