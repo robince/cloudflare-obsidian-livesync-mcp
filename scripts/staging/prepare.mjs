@@ -30,7 +30,7 @@ if (process.argv[2] === '--origin') {
   mcp.kv_namespaces = [{ binding: 'OAUTH_KV' }];
   mcp.vars.VAULT_DATABASE = state.database;
   mcp.vars.GITHUB_CLIENT_ID = '';
-  mcp.vars.GITHUB_ALLOWED_LOGINS = '';
+  mcp.vars.GITHUB_ALLOWED_USER_IDS = '';
   mcp.vars.MCP_WRITES_ENABLED = 'false';
   mcp.observability = { enabled: false };
   for (const [name, config] of [['storage', storage], ['mcp', mcp]]) {

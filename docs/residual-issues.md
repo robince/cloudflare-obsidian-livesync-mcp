@@ -32,7 +32,7 @@ proof of the file currently displayed on any Obsidian device.
 The automatic budget is eight pairs, sixteen live leaves, and 512,000 bytes /
 1,024 chunks per required body. Over-limit, missing-history, missing-chunk,
 delete-versus-modify, and differing binary cases are left to Obsidian. No newer-
-mtime binary policy, background resolver, search index, or attachment storage
+mtime binary policy, background resolver, or attachment storage
 change is implemented. Real-client staging evidence is recorded separately;
 hermetic revision-tree tests alone do not constitute staging acceptance.
 
@@ -94,3 +94,13 @@ The committed OAuth KV preview ID is a local placeholder. Staging and
 production must supply real namespace identifiers, OAuth application values,
 allowlists, domains, and secrets out of band. No fabricated or environment-
 specific identifier should be committed merely to make a static review quiet.
+
+## Contract 5 follow-up boundaries
+
+Search now includes a disposable FTS/property index and stateless continuation.
+Cleanup protects all retained readable revisions and fails closed within its
+budget. Maintenance still requires completed replication and paused writers;
+a disconnected client may hold references the server has never received.
+Outline parsing has explicit complexity limits in addition to the unchanged
+note-size limit. Obsidian attachment placement, relative links, case handling
+and move effects require the next-stage settings review in [roadmap.md](roadmap.md).

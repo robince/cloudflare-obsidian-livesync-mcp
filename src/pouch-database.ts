@@ -1,3 +1,6 @@
+import type { GetVaultFileOutlineRequest, GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
+import { changesFeed, streamChanges, openRevisions, badRequest } from './changes-feed';
+import { chunkReferences } from './chunk-references';
 import { DurableObject } from 'cloudflare:workers';
 import cloudflareDOAdapter from '@robince/pouchdb-adapter-cloudflare-do';
 import PouchDB from 'pouchdb-core';
@@ -28,7 +31,7 @@ import type {
 } from '@cloudflare-obsidian-livesync/contracts';
 
 import { booleanParam, couchError, json, jsonParam, pouchError, readJson } from './http';
-import { matchesSelector } from './selector';
+import { matchesSelector, validateSelector } from './selector';
 import { createInProcessCouchFetch } from './livesync-vault/in-process-couch-fetch';
 import {
   inspectVaultProfile,
@@ -70,7 +73,10 @@ export class PouchDatabase extends DurableObject<Env> {
   private db?: AnyDatabase;
   private dbName?: string;
   private activeChangeLongpolls = 0;
+  private activeSemanticWrites = 0;
+  private maintenanceActive = false;
   private searchLifecycle = Promise.resolve();
+  private mutationLifecycle = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -124,8 +130,7 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   async ensureDatabase(name: string): Promise<void> {
-    this.database(name);
-    this.setMeta('exists', 'true');
+    await this.withMutation(async () => { this.database(name); this.setMeta('exists', 'true'); });
   }
 
   async getDocument(name: string, id: string, options: PouchDB.Core.GetOptions = {}): Promise<JsonObject> {
@@ -136,7 +141,7 @@ export class PouchDatabase extends DurableObject<Env> {
   async putDocument(name: string, document: JsonObject): Promise<PouchDB.Core.Response> {
     this.requireExists();
     ensureDocumentSize(document);
-    return this.database(name).put(document);
+    return this.withMutation(async () => { this.requireExists(); return this.database(name).put(document); });
   }
 
   async allDocuments(
@@ -171,6 +176,10 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.vault().read(request);
   }
 
+  async getVaultFileOutline(request: GetVaultFileOutlineRequest): Promise<VaultResult<GetVaultFileOutlineData>> {
+    return this.vault().outline(request);
+  }
+
   async readVaultAttachment(request: ReadVaultAttachmentRequest): Promise<VaultResult<ReadVaultAttachmentData>> {
     return this.vault().readAttachment(request);
   }
@@ -180,27 +189,27 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   async createVaultFile(request: CreateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
-    return this.vault().create(request);
+    return this.withSemanticWrite(() => this.vault().create(request));
   }
 
   async updateVaultFile(request: UpdateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
-    return this.vault().update(request);
+    return this.withSemanticWrite(() => this.vault().update(request));
   }
 
   async appendVaultFile(request: AppendVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
-    return this.vault().append(request);
+    return this.withSemanticWrite(() => this.vault().append(request));
   }
 
   async patchVaultFile(request: PatchVaultFileRequest): Promise<VaultResult<PatchVaultFileData>> {
-    return this.vault().patch(request);
+    return this.withSemanticWrite(() => this.vault().patch(request));
   }
 
   async patchVaultFrontmatter(request: PatchVaultFrontmatterRequest): Promise<VaultResult<PatchVaultFrontmatterData>> {
-    return this.vault().patchFrontmatter(request);
+    return this.withSemanticWrite(() => this.vault().patchFrontmatter(request));
   }
 
   async deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
-    return this.vault().delete(request);
+    return this.withSemanticWrite(() => this.vault().delete(request));
   }
 
   private requireExists(): void {
@@ -232,6 +241,20 @@ export class PouchDatabase extends DurableObject<Env> {
       },
       acquireCommonlib: (profile) => this.createCommonlib(profile),
     });
+  }
+
+  private async withSemanticWrite<T>(operation: () => Promise<VaultResult<T>>): Promise<VaultResult<T>> {
+    if (this.maintenanceActive) return { ok: false, error: { code: 'unavailable', message: 'Vault maintenance is in progress. Retry after maintenance completes.' } };
+    this.activeSemanticWrites++;
+    try { return await operation(); } finally { this.activeSemanticWrites--; }
+  }
+
+  private async withMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.mutationLifecycle;
+    let release!: () => void;
+    this.mutationLifecycle = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await operation(); } finally { release(); }
   }
 
   private async withSearchLifecycle<T>(operation: () => Promise<T>): Promise<T> {
@@ -281,15 +304,21 @@ export class PouchDatabase extends DurableObject<Env> {
     const name = request.headers.get('x-pouchdb-database');
     if (!name) return couchError(400, 'bad_request', 'database name is required');
     try {
-      return await this.route(request, name);
+      const parts = new URL(request.url).pathname.split('/').filter(Boolean).map(decodeURIComponent);
+      const first = parts[0];
+      const readPost = ['_changes', '_all_docs', '_bulk_get', '_revs_diff', '_find', '_index', '_ensure_full_commit'].includes(first ?? '');
+      const mutate = !['GET', 'HEAD', 'OPTIONS'].includes(request.method) && !(request.method === 'POST' && readPost);
+      if (first === '_purge' || (!first && request.method === 'DELETE')) {
+        return await this.withSearchLifecycle(() => this.withMutation(() => this.route(request, name, parts)));
+      }
+      return mutate ? await this.withMutation(() => this.route(request, name, parts)) : await this.route(request, name, parts);
     } catch (error) {
       return pouchError(error);
     }
   }
 
-  private async route(request: Request, name: string): Promise<Response> {
+  private async route(request: Request, name: string, parts: string[]): Promise<Response> {
     const url = new URL(request.url);
-    const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
 
     if (parts.length === 0) return this.databaseRoute(request, name);
     this.requireExists();
@@ -314,7 +343,8 @@ export class PouchDatabase extends DurableObject<Env> {
   private async databaseRoute(request: Request, name: string): Promise<Response> {
     if (request.method === 'PUT') {
       if (this.exists()) return couchError(412, 'file_exists', 'The database could not be created.');
-      await this.ensureDatabase(name);
+      this.database(name);
+      this.setMeta('exists', 'true');
       return json({ ok: true }, { status: 201 });
     }
     if (request.method === 'GET' || request.method === 'HEAD') {
@@ -396,77 +426,25 @@ export class PouchDatabase extends DurableObject<Env> {
 
   private async changesRoute(request: Request, url: URL, db: AnyDatabase): Promise<Response> {
     const body = request.method === 'POST' ? await readJson<ChangesRequest>(request) : {};
-    const sinceValue = url.searchParams.get('since') ?? '0';
-    const since = sinceValue === 'now'
-      ? (await db.info()).update_seq
-      : /^\d+$/.test(sinceValue) ? Number(sinceValue) : sinceValue;
-    const limit = numberParam(url, 'limit');
-    const selector = body.selector;
-    const query = async () => {
-      const result = await db.changes({
-        since,
-        include_docs: true,
-        conflicts: booleanParam(url, 'conflicts'),
-        attachments: booleanParam(url, 'attachments'),
-        binary: false,
-        revs: booleanParam(url, 'revs'),
-        descending: booleanParam(url, 'descending'),
-        style: url.searchParams.get('style') as 'main_only' | 'all_docs' | undefined,
-        doc_ids: body.doc_ids,
-        return_docs: true,
-      } as PouchDB.Core.ChangesOptions);
-      if (booleanParam(url, 'revs')) {
-        await Promise.all(result.results.map(async (change) => {
-          if (!change.doc?._rev) return;
-          change.doc = await db.get(change.id, {
-            rev: change.doc._rev,
-            revs: true,
-            conflicts: booleanParam(url, 'conflicts'),
-            attachments: booleanParam(url, 'attachments'),
-            binary: false,
-          });
-        }));
-      }
-      let rows = result.results.filter((change) => {
-        return !selector || (!!change.doc && matchesSelector(change.doc as JsonObject, selector));
-      });
-      const matchingRows = rows.length;
-      const hasMore = limit !== undefined && matchingRows > limit;
-      if (limit !== undefined) rows = rows.slice(0, limit);
-      // A client pages _changes using last_seq. When a response is limited,
-      // advancing to the database's final sequence would silently skip rows.
-      const lastSeq = hasMore && rows.length > 0 ? rows[rows.length - 1].seq : result.last_seq;
-      if (booleanParam(url, 'include_docs') !== true) {
-        rows = rows.map(({ doc: _doc, ...change }) => change) as typeof rows;
-      }
-      return { results: rows, last_seq: lastSeq, pending: Math.max(0, matchingRows - rows.length) };
-    };
-
-    let result = await query();
-    if (url.searchParams.get('feed') === 'longpoll' && result.results.length === 0) {
-      const timeout = Math.min(numberParam(url, 'timeout') ?? 25_000, 55_000);
-      this.activeChangeLongpolls += 1;
-      try {
-        await waitForChange(db, since, timeout, request.signal);
-      } finally {
-        this.activeChangeLongpolls -= 1;
-      }
-      result = await query();
+    const value = url.searchParams.get('since') ?? '0';
+    if (value !== 'now' && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) throw badRequest('Invalid since sequence');
+    const since = value === 'now' ? Number((await db.info()).update_seq) : Number(value);
+    let iterator = changesFeed(db, this.ctx.storage.sql, url, body, since, request.signal);
+    let first = await iterator.next();
+    if (url.searchParams.get('feed') === 'longpoll' && first.done) {
+      const resume = first.value.last_seq;
+      this.activeChangeLongpolls++;
+      try { await waitForChange(db, resume, Math.min(numberParam(url, 'timeout') ?? 25_000, 55_000), request.signal); }
+      finally { this.activeChangeLongpolls--; }
+      iterator = changesFeed(db, this.ctx.storage.sql, url, body, resume, request.signal);
+      first = await iterator.next();
     }
-    if (url.searchParams.get('feed') === 'continuous') {
-      const lines = [
-        ...result.results.map((change) => JSON.stringify(change)),
-        JSON.stringify({ last_seq: result.last_seq, pending: result.pending }),
-      ];
-      return new Response(`${lines.join('\n')}\n`, {
-        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-      });
-    }
-    return json(result);
+    return streamChanges(iterator, first, url.searchParams.get('feed') === 'continuous');
   }
 
   private async findRoute(request: Request, db: AnyDatabase): Promise<Response> {
     const body = await readJson<FindRequest>(request);
+    validateSelector(body.selector ?? {});
     const all = await db.allDocs({ include_docs: true });
     let docs = all.rows
       .map((row) => row.doc as JsonObject | undefined)
@@ -493,8 +471,20 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   private async purgeRoute(request: Request, db: AnyDatabase): Promise<Response> {
+    if (request.method !== 'POST') return couchError(405, 'method_not_allowed', 'POST required');
     const requested = await readJson<Record<string, string[]>>(request);
-    return this.withSearchLifecycle(async () => {
+    if (!requested || typeof requested !== 'object' || Array.isArray(requested)
+      || Object.entries(requested).length > 100 || Object.values(requested).some((revs) => !Array.isArray(revs) || revs.length > 100 || !revs.every((rev) => typeof rev === 'string'))) throw badRequest('Invalid purge batch');
+    if (this.activeSemanticWrites > 0) return couchError(409, 'maintenance_busy', 'An MCP write is in progress. Complete replication and pause writers before retrying cleanup.');
+    this.maintenanceActive = true;
+    try {
+    if (Object.keys(requested).some((id) => id.startsWith('h:'))) {
+      const references = await chunkReferences(db, this.ctx.storage.sql);
+      if (Object.keys(requested).some((id) => id.startsWith('h:') && (references.get(id) ?? 0) > 0)) {
+        return couchError(409, 'chunk_referenced', 'Requested chunks are still referenced by retained revisions. No chunks were purged.');
+      }
+    }
+    {
       // Purge has no _changes entry. Invalidate first so a partial purge failure
       // can only cause harmless replay, never a permanently stale search row.
       this.search().invalidatePurgedDocuments(Object.keys(requested));
@@ -504,7 +494,8 @@ export class PouchDatabase extends DurableObject<Env> {
         purged[id] = revisions;
       }
       return json({ purge_seq: null, purged });
-    });
+    }
+    } finally { this.maintenanceActive = false; }
   }
 
   private async viewRoute(request: Request, parts: string[], db: AnyDatabase): Promise<Response> {
@@ -514,17 +505,7 @@ export class PouchDatabase extends DurableObject<Env> {
     if (parts[1] !== 'chunks' || parts[3] !== 'collectDangling') {
       return couchError(404, 'not_found', 'missing_named_view');
     }
-    const all = await db.allDocs({ include_docs: true });
-    const totals = new Map<string, number>();
-    for (const row of all.rows) {
-      const doc = row.doc as JsonObject | undefined;
-      if (!doc) continue;
-      if (String(doc._id).startsWith('h:')) {
-        totals.set(String(doc._id), totals.get(String(doc._id)) ?? 0);
-      } else if (Array.isArray(doc.children)) {
-        for (const child of doc.children) totals.set(String(child), (totals.get(String(child)) ?? 0) + 1);
-      }
-    }
+    const totals = await chunkReferences(db, this.ctx.storage.sql);
     return json({ total_rows: totals.size, offset: 0, rows: [...totals].sort().map(([id, value]) => ({ id, key: [id], value })) });
   }
 
@@ -543,7 +524,7 @@ export class PouchDatabase extends DurableObject<Env> {
         conflicts: booleanParam(url, 'conflicts'),
         attachments: booleanParam(url, 'attachments'),
         binary: false,
-        open_revs: jsonParam<string[] | 'all'>(url, 'open_revs'),
+        open_revs: openRevisions(url),
       });
       if (options.open_revs) return json(await db.get(id, options as PouchDB.Core.GetOptions));
       return json(await db.get(id, options));

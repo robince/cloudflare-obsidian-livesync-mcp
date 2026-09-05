@@ -22,7 +22,7 @@ generated MCP Worker name and the account's verified workers.dev subdomain.
 Create a separate GitHub OAuth application with this origin as its homepage
 and `<origin>/oauth/github/callback` as its callback. Set `GITHUB_CLIENT_ID` in
 the generated MCP config's `vars`, and only the staging account in
-`GITHUB_ALLOWED_LOGINS`. Save only `GITHUB_CLIENT_SECRET` in the ignored
+`GITHUB_ALLOWED_USER_IDS`. Save only `GITHUB_CLIENT_SECRET` in the ignored
 `.wrangler/conflict-staging/mcp-secrets.json`. Deploy MCP and its secret together:
 
 ```sh

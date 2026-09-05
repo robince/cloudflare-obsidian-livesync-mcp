@@ -33,9 +33,9 @@ Only the finite, limited continuous feed used by LiveSync Fast Fetch is
 implemented. Normal PouchDB live replication uses long-poll and is supported.
 
 Authentication is one deployment-wide Basic username/password pair. Use a
-separate deployment where vaults need different trust boundaries. A future MCP
-Worker should use a cross-script Durable Object binding rather than storing or
-forwarding the CouchDB password.
+separate deployment where vaults need different trust boundaries. The MCP Worker uses a cross-script Durable Object binding rather than storing or
+forwarding the CouchDB password. Basic authentication is deliberately a single
+trust boundary across the deployment, not per-vault tenant authorization.
 
 ## Cloudflare constraints
 
@@ -48,11 +48,10 @@ forwarding the CouchDB password.
 - The CouchDB configuration response reports the values expected by LiveSync's
   CouchDB setup audit. Those compatibility values cannot alter Cloudflare's
   platform limits.
-- Mango queries and the dangling-chunk view currently scan all documents inside
-  one Durable Object. This is suitable for initial compatibility, but large
-  vaults will need purpose-built SQL indexes and pagination work.
+- Mango queries remain scans. Chunk maintenance scans retained revision bodies
+  in bounded batches with a fail-closed budget; large histories may exceed it.
 
-## Semantic MCP search (contract version 4)
+## Semantic MCP search (contract version 5)
 
 Each vault Durable Object keeps a private FTS5 index derived from the
 authoritative LiveSync revision tree. `search_files` catches it up from the
@@ -107,3 +106,45 @@ operations, selector paging, long-poll, continuous Fast Fetch framing,
 replication, Mango, the chunk view, purge, and RPC. A separate suite imports the
 generated ESM bundles from the local current PouchDB checkout and repeats
 selector changes and replication.
+
+## Replication and maintenance safety (contract 5 checkpoint)
+
+`_changes` scans bounded batches of 16 candidates from the pinned PouchDB
+adapter's indexed sequence table. Normal unlimited responses stream to their
+captured feed watermark; no implicit result cap is introduced. Long-poll and
+finite continuous feeds remain supported. Filtering advances past excluded rows
+without skipping unreturned matches. `pending` counts remaining underlying feed
+documents, not exact filtered matches. `style=all_docs` selects matching leaf
+revision IDs while `include_docs` returns the winner. Unsupported selector
+operators fail explicitly. `open_revs=all` and revision arrays are validated;
+`limit=0` means one, and negative/fractional/malformed limits return HTTP 400.
+The read-only adapter-table dependency is covered by replication regressions
+and must be reviewed when upgrading the pinned adapter.
+
+The dangling-chunk view and `_purge` inspect all retained available revision
+bodies, including losing leaves, readable ancestors and deletion records.
+Resolution alone does not release chunks still referenced by retained history.
+An unavailable unresolved leaf fails closed; compacted unavailable ancestor
+bodies are no longer recoverable and do not protect former references.
+Purge rechecks references under the per-vault mutation gate and rejects the
+entire requested chunk batch if referenced or safety cannot be established.
+Checks use bounded batches and a 20,000 document/revision, three-second budget;
+`maintenance_unavailable` requires reducing retained history deliberately or
+reviewing maintenance limits, not bypassing validation. Purge batches are capped
+at 100 documents and 100 requested revisions per document.
+
+**Complete replication and pause all writers before maintenance.** The server
+cannot see metadata still on a disconnected client or between separate raw
+replication requests. Active semantic writes block purge; raw authoritative
+mutations serialize with validation/deletion. Commonlib operations do not hold
+that gate around their entire operation, avoiding re-entrant deadlocks. There is
+no automatic cleanup. Compaction deliberately sacrifices readable historical
+bodies; conflict resolution and compaction are distinct retention decisions.
+
+The semantic contract is version 5. Only disposable derived-index tables are
+rebuilt during schema migration; the authoritative namespace, revisions and
+replication checkpoints are preserved. Search content, normalized properties,
+conflict metadata and index checkpoint update transactionally. Persisted cursor
+generations survive object restart and change on indexed mutations or rebuilds.
+See the [MCP interface](apps/cloudflare-obsidian-mcp/README.md) for query typing,
+pagination and bounded outline semantics.

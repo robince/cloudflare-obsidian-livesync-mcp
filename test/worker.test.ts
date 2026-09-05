@@ -258,3 +258,63 @@ describe('CouchDB compatibility surface', () => {
     expect((await stub.allDocuments(name)).rows.map((row) => row.id)).toEqual(['from-worker']);
   });
 });
+
+describe('replication and maintenance regressions', () => {
+  it('streams complete and descending feeds and pages sparse matching conflicts without skipping', async () => {
+    const name = databaseName('bounded');
+    const db = remote(name);
+    await db.bulkDocs(Array.from({ length: 130 }, (_, index) => ({ _id: `d${String(index).padStart(3, '0')}`, chosen: index % 17 === 0 })));
+    const complete = await (await couchFetch(`/${name}/_changes`)).json() as { results: Array<{ id: string; seq: number }> };
+    expect(complete.results).toHaveLength(130);
+    const descending = await (await couchFetch(`/${name}/_changes?descending=true`)).json() as typeof complete;
+    expect(descending.results.map((row) => row.id)).toEqual(complete.results.map((row) => row.id).reverse());
+    let since = 0;
+    const seen: string[] = [];
+    for (let page = 0; page < 10; page++) {
+      const result = await (await couchFetch(`/${name}/_changes?since=${since}&limit=2`, {
+        method: 'POST', body: JSON.stringify({ selector: { chosen: true } }),
+      })).json() as { results: Array<{ id: string }>; last_seq: number; pending: number };
+      seen.push(...result.results.map((row) => row.id)); since = result.last_seq;
+      if (!result.pending) break;
+    }
+    expect(seen).toEqual(Array.from({ length: 8 }, (_, index) => `d${String(index * 17).padStart(3, '0')}`));
+    const zero = await (await couchFetch(`/${name}/_changes?limit=0`)).json() as typeof complete;
+    expect(zero.results).toHaveLength(1);
+    for (const limit of ['-1', '1.5', 'nope', '']) expect((await couchFetch(`/${name}/_changes?limit=${limit}`)).status).toBe(400);
+    expect((await couchFetch(`/${name}/_changes`, { method: 'POST', body: JSON.stringify({ selector: { chosen: { $regex: 'x' } } }) })).status).toBe(400);
+    await db.bulkDocs([
+      { _id: 'conflict', _rev: '1-aaaa', selected: true },
+      { _id: 'conflict', _rev: '1-zzzz', selected: false },
+    ], { new_edits: false });
+    const conflict = await (await couchFetch(`/${name}/_changes?style=all_docs&include_docs=true`, {
+      method: 'POST', body: JSON.stringify({ selector: { selected: true } }),
+    })).json() as { results: Array<{ changes: Array<{ rev: string }>; doc: { selected: boolean } }> };
+    expect(conflict.results).toHaveLength(1);
+    expect(conflict.results[0]).toMatchObject({ changes: [{ rev: '1-aaaa' }], doc: { selected: false } });
+    expect(await db.get('conflict', { open_revs: 'all' })).toHaveLength(2);
+    expect((await couchFetch(`/${name}/conflict?open_revs=nope`)).status).toBe(400);
+    await db.close();
+  });
+
+  it('protects losing leaves and retained ancestors before allowing chunk cleanup', async () => {
+    const name = databaseName('retained');
+    const db = remote(name);
+    await db.bulkDocs(['left', 'right', 'orphan'].map((key) => ({ _id: `h:${key}`, type: 'leaf', data: key })));
+    await db.bulkDocs([
+      { _id: 'note.md', _rev: '1-aaaa', path: 'note.md', children: ['h:left'] },
+      { _id: 'note.md', _rev: '1-zzzz', path: 'note.md', children: ['h:right'] },
+    ], { new_edits: false });
+    const view = await (await couchFetch(`/${name}/_design/chunks/_view/collectDangling`)).json() as { rows: Array<{ id: string; value: number }> };
+    expect(view.rows.find((row) => row.id === 'h:left')?.value).toBe(1);
+    const left = await db.get('h:left'); const orphan = await db.get('h:orphan');
+    const purge = (body: object) => couchFetch(`/${name}/_purge`, { method: 'POST', body: JSON.stringify(body) });
+    expect((await purge({ 'h:left': [left._rev], 'h:orphan': [orphan._rev] })).status).toBe(409);
+    await expect(db.get('h:orphan')).resolves.toBeDefined();
+    await db.remove('note.md', '1-aaaa');
+    expect((await purge({ 'h:left': [left._rev] })).status).toBe(409);
+    await db.compact();
+    expect((await purge({ 'h:left': [left._rev] })).status).toBe(200);
+    expect((await purge({ 'h:orphan': [orphan._rev] })).status).toBe(200);
+    await db.close();
+  });
+});

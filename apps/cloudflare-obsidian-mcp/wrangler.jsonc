@@ -27,7 +27,7 @@
     "VAULT_DATABASE": "replace-me",
     "MCP_PUBLIC_BASE_URL": "https://replace-me.example.com",
     "MCP_WRITES_ENABLED": "false",
-    "GITHUB_ALLOWED_LOGINS": "",
+    "GITHUB_ALLOWED_USER_IDS": "",
     "GITHUB_CLIENT_ID": ""
   },
   "observability": {

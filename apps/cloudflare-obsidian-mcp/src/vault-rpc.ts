@@ -1,3 +1,4 @@
+import type { GetVaultFileOutlineRequest, GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
 import type {
   AppendVaultFileRequest,
   CreateVaultFileRequest,
@@ -42,6 +43,7 @@ export interface VaultRpc {
   listVaultFiles(request: ListVaultFilesRequest): Promise<VaultResult<ListVaultFilesData>>;
   searchVaultFiles(request: SearchVaultFilesRequest): Promise<VaultResult<SearchVaultFilesData>>;
   listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>>;
+  getVaultFileOutline(request: GetVaultFileOutlineRequest): Promise<VaultResult<GetVaultFileOutlineData>>;
   readVaultFile(request: ReadVaultFileRequest): Promise<VaultResult<ReadVaultFileData>>;
   readVaultAttachment(request: ReadVaultAttachmentRequest): Promise<VaultResult<ReadVaultAttachmentData>>;
   readVaultFrontmatter(request: ReadVaultFrontmatterRequest): Promise<VaultResult<ReadVaultFrontmatterData>>;
@@ -64,6 +66,7 @@ function unavailableRpc(): VaultRpc {
     searchVaultFiles: async () => invalid,
     listVaultAttachments: async () => invalid,
     readVaultFile: async () => invalid,
+    getVaultFileOutline: async () => invalid,
     readVaultAttachment: async () => invalid,
     readVaultFrontmatter: async () => invalid,
     createVaultFile: async () => invalid,

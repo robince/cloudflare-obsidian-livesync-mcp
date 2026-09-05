@@ -46,6 +46,7 @@
     "@cloudflare-obsidian-livesync/contracts": "workspace:*",
     "@robince/pouchdb-adapter-cloudflare-do": "1.1.2-cloudflare-do.0",
     "@vrtmrz/livesync-commonlib": "0.1.19",
+    "markdown-it": "14.3.1",
     "pouchdb-adapter-http": "^9.0.0",
     "pouchdb-adapter-sqlite-core": "npm:@robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0",
     "pouchdb-core": "^9.0.0",
@@ -56,6 +57,7 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.0",
     "@modelcontextprotocol/client": "2.0.0",
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.0.0",
     "@types/pouchdb-core": "^7.0.15",
     "pouchdb-find": "^9.0.0",

@@ -7,7 +7,7 @@ import {
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { createMcpHandler } from 'agents/mcp/server';
 
-import { allowedGithubLogins, normalizeGithubLogin } from './auth-utils';
+import { allowedGithubUserIds, normalizeGithubLogin } from './auth-utils';
 import { vaultRpcForEnv } from './vault-rpc';
 import { accessTokenScopes, allowlistFromEnv, createVaultMcpServer, READ_SCOPE, WRITE_SCOPE } from './vault-tools';
 const AUTH_STATE_TTL_SECONDS = 10 * 60;
@@ -37,7 +37,7 @@ class McpApi extends WorkerEntrypoint<Env, McpAuthProps> {
     const origin = publicOrigin(this.env);
     return createMcpHandler(
       () => createVaultMcpServer(vaultRpcForEnv(this.env), {
-        allowedLogins: allowlistFromEnv(this.env),
+        allowedUserIds: allowlistFromEnv(this.env),
         writesEnabled: writesEnabled(this.env),
       }),
       {
@@ -123,7 +123,7 @@ async function startAuthorization(request: Request, env: OAuthEnv): Promise<Resp
     { expirationTtl: AUTH_STATE_TTL_SECONDS },
   );
   return htmlResponse(
-    consentPage(id, csrf, client.clientName ?? 'MCP client', authorization.scope),
+    consentPage(id, csrf, client.clientName ?? 'MCP client', authorization.scope, authorization.clientId, authorization.redirectUri, env.VAULT_DATABASE),
     csrfCookie(csrf),
     new URL(authorization.redirectUri).origin,
   );
@@ -176,7 +176,7 @@ async function completeGithubAuthorization(request: Request, env: OAuthEnv): Pro
     const githubToken = await exchangeGithubCode(code, env);
     const githubUser = await fetchGithubUser(githubToken);
     const login = normalizeGithubLogin(githubUser.login);
-    if (!allowedGithubLogins(env.GITHUB_ALLOWED_LOGINS).has(login)) {
+    if (!allowedGithubUserIds(env.GITHUB_ALLOWED_USER_IDS).has(String(githubUser.id))) {
       return new Response('This GitHub account is not allowed.', { status: 403, headers: { 'set-cookie': clearCsrfCookie() } });
     }
     const scopes = grantedScopes({ scopes: state.request.scope }, writesEnabled(env));
@@ -327,11 +327,11 @@ function requiredValue(value: string | undefined, name: string): string {
   return value;
 }
 
-function consentPage(authorizationId: string, csrf: string, clientName: string, scopes: string[]): string {
+function consentPage(authorizationId: string, csrf: string, clientName: string, scopes: string[], clientId: string, redirectUri: string, vault: string): string {
   const access = scopes.includes(WRITE_SCOPE)
-    ? 'list, read, create, edit, and delete Markdown files'
-    : 'list and read Markdown files';
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>${escapeHtml(clientName)} requests access to ${access} in your configured vault.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
+    ? 'list, search, and read Markdown files and attachments; create, edit, and delete Markdown files'
+    : 'list, search, and read Markdown files and attachments';
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>Client-provided name: ${escapeHtml(clientName)}. This name alone does not verify the client.</p><p>Client ID: ${escapeHtml(clientId)}</p><p>Redirect destination: ${escapeHtml(redirectUri)}</p><p>Only continue if you recognize this destination. A localhost destination does not identify the application listening there.</p><p>Vault: ${escapeHtml(vault)}. Requested access: ${access}.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
 }
 
 function htmlResponse(body: string, setCookie: string, clientOrigin: string): Response {

@@ -42,7 +42,7 @@ describe('vault RPC', () => {
 
     expect(status).toEqual({
       ok: true,
-      data: { contractVersion: 4, compatible: true, reasons: [] },
+      data: { contractVersion: 5, compatible: true, reasons: [] },
     });
   });
 
@@ -1170,5 +1170,173 @@ describe('vault RPC', () => {
       ok: true,
       data: { content },
     });
+  });
+});
+
+describe('filtered search and partial reads', () => {
+  it('queries typed properties with literal keys, normalized tags, dates, null and invalid YAML', async () => {
+    const { stub } = await seededVault('properties');
+    await stub.createVaultFile({ path: 'queries/a.md', content: '---\nstatus: open\ntags: "#project, other"\nscore: 12\ndue: 2026-01-02\n"a.b": yes\nnil: null\n---\npropertymarker\n' });
+    await stub.createVaultFile({ path: 'queries/b.md', content: '---\nstatus: closed\nscore: "12"\n---\npropertymarker\n' });
+    await stub.createVaultFile({ path: 'queries/bad.md', content: '---\ninvalid: [\n---\npropertymarker\n' });
+    const filters = [
+      { property: 'status', operator: 'eq' as const, value: 'open' },
+      { property: 'tags', operator: 'contains' as const, value: '#project' },
+      { property: 'score', operator: 'gte' as const, type: 'number' as const, value: 10 },
+      { property: 'due', operator: 'lt' as const, type: 'date' as const, value: '2026-02-01' },
+      { property: 'a.b', operator: 'eq' as const, value: 'yes' },
+      { property: 'nil', operator: 'eq' as const, value: null },
+    ];
+    await expect(stub.searchVaultFiles({ pathPrefix: 'queries/', filters, properties: ['status', 'tags', 'missing'] })).resolves.toMatchObject({
+      ok: true, data: { results: [{ path: 'queries/a.md', properties: { status: 'open', tags: ['project', 'other'] } }], incomplete: true, unqueryableFiles: 1 },
+    });
+    await expect(stub.searchVaultFiles({ query: 'propertymarker' })).resolves.toMatchObject({ ok: true, data: { results: [{}, {}, {}], incomplete: false } });
+    await expect(stub.searchVaultFiles({ pathPrefix: 'queries/', filters: [{ property: 'nil', operator: 'exists', value: false }] })).resolves.toMatchObject({ ok: true, data: { results: [{ path: 'queries/b.md' }] } });
+    await expect(stub.searchVaultFiles({ filters: [{ property: "x') OR 1=1 --", operator: 'eq', value: 'open' }] })).resolves.toMatchObject({ ok: true, data: { results: [] } });
+  });
+
+  it('paginates text and property queries exhaustively and expires cursors after indexed edits', async () => {
+    const { stub } = await seededVault('pagination');
+    for (let index = 0; index < 57; index++) await stub.createVaultFile({ path: `pages/${String(index).padStart(3, '0')}.md`, content: '---\nstatus: open\n---\npaginationmarker\n' });
+    for (const query of [{ query: 'paginationmarker' }, { filters: [{ property: 'status', operator: 'eq' as const, value: 'open' }] }]) {
+      let cursor: string | undefined;
+      const paths: string[] = [];
+      do {
+        const page = await stub.searchVaultFiles({ ...query, pathPrefix: 'pages/', limit: 20, cursor });
+        expect(page.ok).toBe(true); if (!page.ok) return;
+        paths.push(...page.data.results.map((row) => row.path)); cursor = page.data.cursor;
+      } while (cursor);
+      expect(paths).toHaveLength(57); expect(new Set(paths).size).toBe(57);
+    }
+    const first = await stub.searchVaultFiles({ query: 'paginationmarker', limit: 2 });
+    if (!first.ok) throw new Error('search failed');
+    await expect(stub.searchVaultFiles({ query: 'other', cursor: first.data.cursor })).resolves.toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+    const note = await stub.readVaultFile({ path: 'pages/000.md' }); if (!note.ok) throw new Error('read failed');
+    await stub.appendVaultFile({ path: note.data.path, expectedRevision: note.data.revision, content: 'changed' });
+    await expect(stub.searchVaultFiles({ query: 'paginationmarker', cursor: first.data.cursor })).resolves.toMatchObject({ ok: false, error: { code: 'cursor_expired' } });
+    const fresh = await stub.searchVaultFiles({ query: 'paginationmarker', limit: 2 }); if (!fresh.ok) return;
+    await runInDurableObject(stub, async (instance: PouchDatabase) => { instance['search']().invalidatePurgedDocuments([]); });
+    await expect(stub.searchVaultFiles({ query: 'paginationmarker', cursor: fresh.data.cursor })).resolves.toMatchObject({ ok: false, error: { code: 'cursor_expired' } });
+  });
+
+  it('returns headings and exact line ranges without treating partial content as a full note', async () => {
+    const { stub } = await seededVault('outline');
+    const content = '---\r\ntitle: sample\r\n---\r\n# First\r\n雪 body\r\n## Child\r\n```md\r\n# Hidden\r\n```\r\nSecond\r\n======\r\nend\r\n';
+    const created = await stub.createVaultFile({ path: 'outline.md', content }); if (!created.ok) throw new Error('create failed');
+    await expect(stub.getVaultFileOutline({ path: 'outline.md' })).resolves.toMatchObject({ ok: true, data: {
+      totalLines: 12, headings: [{ text: 'First', level: 1, startLine: 4, endLine: 9 }, { text: 'Child', level: 2, startLine: 6, endLine: 9 }, { text: 'Second', level: 1, startLine: 10, endLine: 12 }],
+    } });
+    await expect(stub.readVaultFile({ path: 'outline.md', startLine: 4, endLine: 5, expectedRevision: created.data.revision })).resolves.toMatchObject({ ok: true, data: { content: '# First\r\n雪 body\r\n', partial: true, totalLines: 12 } });
+    await expect(stub.readVaultFile({ path: 'outline.md', startLine: 13 })).resolves.toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+    await stub.appendVaultFile({ path: 'outline.md', expectedRevision: created.data.revision, content: 'new' });
+    await expect(stub.readVaultFile({ path: 'outline.md', startLine: 4, expectedRevision: created.data.revision })).resolves.toMatchObject({ ok: false, error: { code: 'revision_conflict' } });
+  });
+
+  it('ignores HTML comment headings and bounds outline parsing before allocating tokens', async () => {
+    const { stub } = await seededVault('outline-limits');
+    await stub.createVaultFile({ path: 'comments.md', content: '# [Same][ref]\n<!--\n# Hidden\n-->\n# Same\n\n[ref]: https://example.com\n' });
+    await expect(stub.getVaultFileOutline({ path: 'comments.md' })).resolves.toMatchObject({ ok: true, data: {
+      headings: [{ text: 'Same', startLine: 1, endLine: 4 }, { text: 'Same', startLine: 5, endLine: 7 }],
+    } });
+    for (const [path, content] of [['dense.md', '#\n'.repeat(10000)], ['headings.md', '# x\n'.repeat(1025)], ['long-heading.md', '# ' + 'x'.repeat(33000)]]) {
+      expect((await stub.createVaultFile({ path, content })).ok).toBe(true);
+      await expect(stub.getVaultFileOutline({ path })).resolves.toMatchObject({ ok: false, error: { code: 'too_large' } });
+      expect((await stub.readVaultFile({ path, startLine: 1, endLine: 1 })).ok).toBe(true);
+    }
+  });
+
+  it('continues byte-shortened pages after recreating the derived index reader', async () => {
+    const { stub } = await seededVault('byte-pages');
+    for (let index = 0; index < 5; index++) await stub.createVaultFile({ path: `large-properties/${index}.md`, content: `---\nstatus: open\nlarge: ${'x'.repeat(18000)}\n---\n` });
+    const request = { pathPrefix: 'large-properties/', filters: [{ property: 'status', operator: 'eq' as const, value: 'open' }], properties: ['large'], limit: 50 };
+    const first = await stub.searchVaultFiles(request);
+    if (!first.ok) throw new Error('search failed');
+    expect(first.data.results.length).toBeLessThan(5);
+    expect(first.data.cursor).toBeTruthy();
+    // Each RPC constructs a fresh search reader; continuation uses only persisted SQL state.
+    const paths = first.data.results.map((row) => row.path);
+    let cursor = first.data.cursor;
+    while (cursor) {
+      const next = await stub.searchVaultFiles({ ...request, cursor });
+      if (!next.ok) throw new Error(next.error.code);
+      paths.push(...next.data.results.map((row) => row.path)); cursor = next.data.cursor;
+    }
+    expect(paths).toHaveLength(5); expect(new Set(paths).size).toBe(5);
+  });
+
+  it('fails cleanup closed on unreadable leaves and serializes encoded purge with writes', async () => {
+    const { name, stub } = await seededVault('maintenance-safety');
+    const chunk = await stub.putDocument(name, { _id: 'h:orphan-safety', type: 'leaf', data: 'orphan' });
+    const outcome = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const db = instance['database']();
+      const purgeRequest = () => new Request('https://livesync.invalid/%5Fpurge', { method: 'POST', headers: { 'x-pouchdb-database': name }, body: JSON.stringify({ 'h:orphan-safety': [chunk.rev] }) });
+      const get = db.get.bind(db);
+      db.get = ((id: string, options: object) => id === 'notes/frontmatter.md' ? Promise.reject(new Error('unreadable leaf')) : get(id, options)) as typeof db.get;
+      const failed = await instance.fetch(purgeRequest());
+      db.get = get as typeof db.get;
+      let release!: () => void;
+      let started!: () => void;
+      const began = new Promise<void>((resolve) => { started = resolve; });
+      const hold = new Promise<void>((resolve) => { release = resolve; });
+      const write = instance['withSemanticWrite'](async () => { started(); await hold; return { ok: true as const, data: {} }; });
+      await began;
+      const busy = await instance.fetch(purgeRequest());
+      release(); await write;
+      return { failed: failed.status, busy: busy.status, chunk: await db.get('h:orphan-safety') };
+    });
+    expect(outcome).toMatchObject({ failed: 503, busy: 409, chunk: { data: 'orphan' } });
+  });
+
+  it('bounds replication hydration and holds authoritative writes until purge validation finishes', async () => {
+    const { name, stub } = await seededVault('bounded-gate');
+    for (let index = 0; index < 40; index++) await stub.putDocument(name, { _id: `raw-${index}`, value: index });
+    const chunk = await stub.putDocument(name, { _id: 'h:gate-orphan', type: 'leaf', data: 'orphan' });
+    const observed = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const db = instance['database']();
+      const changes = db.changes.bind(db);
+      const batchSizes: number[] = [];
+      db.changes = ((options: PouchDB.Core.ChangesOptions) => {
+        batchSizes.push(options.doc_ids?.length ?? Infinity);
+        expect(options.limit).toBeLessThanOrEqual(16);
+        return changes(options);
+      }) as typeof db.changes;
+      const feed = await instance.fetch(new Request('https://livesync.invalid/_changes', { headers: { 'x-pouchdb-database': name } }));
+      const feedBody = await feed.json() as { results: unknown[] };
+      db.changes = changes as typeof db.changes;
+      const get = db.get.bind(db);
+      let release!: () => void;
+      let started!: () => void;
+      const began = new Promise<void>((resolve) => { started = resolve; });
+      const hold = new Promise<void>((resolve) => { release = resolve; });
+      let once = false;
+      db.get = (async (id: string, options: object) => {
+        if (!once && id === 'notes/frontmatter.md') { once = true; started(); await hold; }
+        return get(id, options);
+      }) as typeof db.get;
+      const purge = instance.fetch(new Request('https://livesync.invalid/%5Fpurge', { method: 'POST', headers: { 'x-pouchdb-database': name }, body: JSON.stringify({ 'h:gate-orphan': [chunk.rev] }) }));
+      await began;
+      let written = false;
+      const write = instance.putDocument(name, { _id: 'after-maintenance', value: 1 }).then(() => { written = true; });
+      await Promise.resolve(); await Promise.resolve();
+      const duringValidation = written;
+      release(); const response = await purge; await write;
+      db.get = get as typeof db.get;
+      return { batchSizes, results: feedBody.results.length, duringValidation, purge: response.status, written };
+    });
+    expect(Math.max(...observed.batchSizes)).toBeLessThanOrEqual(16);
+    expect(observed.batchSizes.length).toBeGreaterThan(2);
+    expect(observed.results).toBeGreaterThan(40);
+    expect(observed).toMatchObject({ duringValidation: false, purge: 200, written: true });
+  });
+
+  it('preserves both files when a composed copy/delete races a source edit', async () => {
+    const { stub } = await seededVault('copy-delete');
+    await stub.createVaultFile({ path: 'source.md', content: 'original' });
+    const read = await stub.readVaultFile({ path: 'source.md' }); if (!read.ok) throw new Error('read');
+    await stub.createVaultFile({ path: 'destination.md', content: read.data.content });
+    await stub.appendVaultFile({ path: 'source.md', expectedRevision: read.data.revision, content: ' newer' });
+    await expect(stub.deleteVaultFile({ path: 'source.md', expectedRevision: read.data.revision })).resolves.toMatchObject({ ok: false, error: { code: 'revision_conflict' } });
+    await expect(stub.readVaultFile({ path: 'source.md' })).resolves.toMatchObject({ ok: true, data: { content: 'original newer' } });
+    await expect(stub.readVaultFile({ path: 'destination.md' })).resolves.toMatchObject({ ok: true, data: { content: 'original' } });
   });
 });

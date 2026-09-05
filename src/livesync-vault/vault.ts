@@ -1,3 +1,5 @@
+import { fileLines, outline } from './outline';
+import { getVaultFileOutlineRequestSchema, type GetVaultFileOutlineRequest, type GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
 import {
   appendVaultFileRequestSchema,
   CONTRACT_VERSION,
@@ -140,8 +142,29 @@ export class LiveSyncVault {
       }
       const file = await commonlib.read(parsed.data.path, VAULT_LIMITS.maxReadBytes);
       if (!file) return failure('not_found', 'File not found.');
+      if (parsed.data.expectedRevision && parsed.data.expectedRevision !== file.revision) return { ok: false, error: revisionConflict(parsed.data.path) };
+      if (parsed.data.startLine !== undefined || parsed.data.endLine !== undefined) {
+        const lines = fileLines(file.content);
+        const start = parsed.data.startLine ?? 1;
+        if (start > Math.max(1, lines.length)) return failure('invalid_input', 'startLine exceeds the file line count.');
+        const end = Math.min(parsed.data.endLine ?? lines.length, lines.length);
+        return success({ path: parsed.data.path, revision: file.revision, content: lines.slice(start - 1, end).join(''),
+          startLine: start, endLine: end, totalLines: lines.length, partial: start > 1 || end < lines.length });
+      }
       return success({ path: parsed.data.path, revision: file.revision, content: file.content });
     });
+  }
+
+  async outline(request: GetVaultFileOutlineRequest): Promise<VaultResult<GetVaultFileOutlineData>> {
+    const parsed = getVaultFileOutlineRequestSchema.safeParse(request);
+    if (!parsed.success) return failure('invalid_input', 'Invalid outline request.');
+    const read = await this.read(parsed.data);
+    if (!read.ok) return read;
+    try {
+      return success({ path: read.data.path, revision: read.data.revision, ...outline(read.data.content) });
+    } catch (error) {
+      return failure(errorCode(error), errorMessage(error));
+    }
   }
 
   async readAttachment(request: ReadVaultAttachmentRequest): Promise<VaultResult<ReadVaultAttachmentData>> {

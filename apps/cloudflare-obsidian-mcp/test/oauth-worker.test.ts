@@ -85,14 +85,14 @@ async function beginGithubFlow() {
   return { client, cookie, githubState: github.searchParams.get('state') ?? '' };
 }
 
-function mockGithub(login: string) {
+function mockGithub(login: string, id = login.toLowerCase() === 'robince' ? 12345 : 54321) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
     if (url.pathname === '/login/oauth/access_token') {
       return Response.json({ access_token: 'github-token' });
     }
     if (url.origin === 'https://api.github.com' && url.pathname === '/user') {
-      return Response.json({ id: 12345, login });
+      return Response.json({ id, login });
     }
     throw new Error(`Unexpected outbound request: ${url}`);
   });
@@ -148,7 +148,11 @@ describe('OAuth Worker boundary', () => {
     const client = await registerClient();
     const read = await workerFetch(authorizeUrl(client.client_id));
     expect(read.status).toBe(200);
-    expect(await read.text()).toContain('list and read Markdown files');
+    const consentText = await read.text();
+    expect(consentText).toContain('Markdown files and attachments');
+    expect(consentText).toContain('https://client.example/callback');
+    expect(consentText).toContain('test-vault');
+    expect(consentText).toContain(client.client_id);
     expect(read.headers.get('set-cookie')).toContain('__Host-obsidian-mcp-csrf=');
     expect(read.headers.get('content-security-policy'))
       .toContain("form-action 'self' https://github.com https://client.example");
@@ -168,7 +172,7 @@ describe('OAuth Worker boundary', () => {
   it('completes an allowlisted GitHub flow once and rejects callback replay', async () => {
     const { client, cookie, githubState } = await beginGithubFlow();
     expect(githubState).toBeTruthy();
-    const fetchSpy = mockGithub('RobinCE');
+    const fetchSpy = mockGithub('renamed-account', 12345);
 
     const callbackUrl = `${ORIGIN}/oauth/github/callback?code=github-code&state=${githubState}`;
     const callback = await workerFetch(callbackUrl, { headers: { cookie }, redirect: 'manual' });
@@ -239,9 +243,9 @@ describe('OAuth Worker boundary', () => {
     expect(await replay.text()).toBe('GitHub authorization has expired.');
   });
 
-  it('rejects a GitHub login outside the runtime allowlist', async () => {
+  it('rejects a reused allowlisted username belonging to a different ID', async () => {
     const { cookie, githubState } = await beginGithubFlow();
-    mockGithub('intruder');
+    mockGithub('robince', 54321);
     const callback = await workerFetch(
       `${ORIGIN}/oauth/github/callback?code=github-code&state=${githubState}`,
       { headers: { cookie }, redirect: 'manual' },

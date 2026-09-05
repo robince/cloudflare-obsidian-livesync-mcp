@@ -79,7 +79,7 @@ describe('MCP to storage Durable Object integration', () => {
 
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual([
-      'vault_status', 'list_files', 'search_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
       'create_file', 'edit_file', 'append_file', 'patch_file', 'patch_frontmatter', 'delete_file',
     ]);
     const patchFrontmatter = tools.tools.find((tool) => tool.name === 'patch_frontmatter');
@@ -114,6 +114,13 @@ describe('MCP to storage Durable Object integration', () => {
     await expect(client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md' } })).resolves.toMatchObject({
       structuredContent: { content: fixture.files['notes/unicode-雪.md'] },
     });
+    const readWithText = await client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md' } });
+    const textBlock = readWithText.content.find((item) => item.type === 'text');
+    expect(textBlock?.type === 'text' && JSON.parse(textBlock.text)).toEqual(readWithText.structuredContent);
+    const outlineResult = await client.callTool({ name: 'get_file_outline', arguments: { path: 'notes/unicode-雪.md' } });
+    expect(outlineResult).toMatchObject({ structuredContent: { path: 'notes/unicode-雪.md', revision: expect.any(String), headings: expect.any(Array) } });
+    await expect(client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md', startLine: 1, endLine: 1 } })).resolves.toMatchObject({ structuredContent: { startLine: 1, endLine: 1, totalLines: expect.any(Number) } });
+    await expect(client.callTool({ name: 'search_files', arguments: { filters: [{ property: 'title', operator: 'eq', value: 'MCP fixture' }], properties: ['title'] } })).resolves.toMatchObject({ structuredContent: { results: [expect.objectContaining({ path: 'notes/frontmatter.md', properties: { title: 'MCP fixture' } })] } });
     await expect(client.callTool({ name: 'read_frontmatter', arguments: { path: 'notes/frontmatter.md' } })).resolves.toMatchObject({
       structuredContent: { frontmatter: { title: 'MCP fixture' } },
     });
@@ -184,7 +191,7 @@ describe('MCP to storage Durable Object integration', () => {
     closeables.push(client, server);
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
-      'vault_status', 'list_files', 'search_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
     ]);
   });
 });

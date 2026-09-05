@@ -39,6 +39,10 @@ The selected architecture and phased implementation plan for logical Obsidian
 vault access and a separate MCP Worker are documented in
 [MCP_PLAN.md](MCP_PLAN.md).
 
+See the [forward roadmap](docs/roadmap.md) for the next priorities: reliable,
+approachable open-source deployment into an individual Cloudflare free account,
+with optional MCP access.
+
 ## Deploy
 
 Follow [DEPLOY.md](DEPLOY.md) to deploy from this private repository with

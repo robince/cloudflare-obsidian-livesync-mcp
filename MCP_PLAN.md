@@ -1,5 +1,9 @@
 # Obsidian LiveSync MCP — minimal write-capable plan
 
+For future priorities, see the [forward roadmap](docs/roadmap.md), focused on
+open-source deployment into individual Cloudflare free accounts. This document
+retains the detailed implementation checkpoints and acceptance history.
+
 ## Goal
 
 Build the smallest useful authenticated MCP server that can list, read, create,
@@ -390,3 +394,33 @@ checkpoint.
 - Do not mix unrelated user changes into a checkpoint.
 - Production identifiers and secrets are supplied out of band and never
   committed.
+
+
+## Contract 5 reliability and focused MCP implementation
+
+Four local checkpoints (no remote deployment):
+
+1. Bounded streamed replication and retained-revision cleanup safety, with a
+   mutation gate and explicit completed-sync/paused-writer maintenance requirement.
+2. Immutable GitHub ID authorization, escaped destination-aware consent, JSON
+   text plus structured results, conservative annotations and revision recovery
+   instructions. See the MCP README for the required allowlist migration.
+3. Typed AND frontmatter filtering in the existing derived index, selected
+   properties, text/property continuation and persisted generation invalidation.
+4. Markdown-token outlines, exact line ranges and expected revisions, preserving
+   the 512,000-byte reader limit and bounding outline parsing work.
+
+Storage/cleanup, MCP/auth and search/outline received separate code reviews;
+review fixes include semantic-write/purge coordination, decoded-route gating,
+frontmatter contract types, and bounded HTML-aware outline parsing. Regression
+coverage includes sparse replication, retained conflicts, ID reuse, typed filters,
+exhaustive pagination, stale ranges and a concurrent-edit copy/delete failure.
+Authoritative database/revision state is preserved; only derived tables rebuild.
+The next-stage Obsidian settings review is recorded in docs/roadmap.md.
+
+Local validation completed: dependency provenance/type checks, full existing test
+suite (including real MCP client and OAuth flows), generated-type checks, both
+Worker dry-runs, and `git diff --check`. Additional regressions cover bounded
+replication hydration, encoded purge/write serialization, unreadable retained
+leaves, byte-shortened pagination, HTML comments/reference headings and outline
+complexity limits. No remote deployments or interactive staging were performed.
