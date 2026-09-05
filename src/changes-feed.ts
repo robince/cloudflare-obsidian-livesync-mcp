@@ -44,15 +44,15 @@ export async function* changesFeed(
   const style = url.searchParams.get('style') ?? 'main_only';
   if (style !== 'main_only' && style !== 'all_docs') throw badRequest('Unsupported changes style');
   const target = Number((await db.info()).update_seq);
-  let position = descending ? target + 1 : since;
-  let last = descending ? 0 : since;
+  let position = descending ? (since > 0 ? since : target + 1) : since;
+  let last = since;
   let emitted = 0;
   const wanted = body.doc_ids ? new Set(body.doc_ids) : undefined;
   while (emitted < limit) {
     signal.throwIfAborted();
     const candidates = sql.exec<{ id: string; max_seq: number }>(
       `SELECT id,max_seq FROM "document-store" WHERE max_seq ${descending ? '<' : '>'} ? AND max_seq<=? ORDER BY max_seq ${descending ? 'DESC' : 'ASC'} LIMIT ?`,
-      position, target, Math.min(PAGE, limit - emitted),
+      position, target, PAGE,
     ).toArray();
     if (!candidates.length) break;
     const ids = candidates.filter(({ id }) => !wanted || wanted.has(id)).map(({ id }) => id);
@@ -63,6 +63,7 @@ export async function* changesFeed(
     }) : { results: [] };
     const byId = new Map(page.results.map((row) => [row.id, row]));
     for (const candidate of candidates) {
+      if (emitted >= limit) break;
       signal.throwIfAborted();
       position = candidate.max_seq;
       last = position;

@@ -1329,6 +1329,63 @@ describe('filtered search and partial reads', () => {
     expect(observed).toMatchObject({ duringValidation: false, purge: 200, written: true });
   });
 
+  it('rejects ranges on empty notes while retaining full reads and empty outlines', async () => {
+    const { stub } = await seededVault('empty-range');
+    expect((await stub.createVaultFile({ path: 'empty.md', content: '' })).ok).toBe(true);
+    await expect(stub.readVaultFile({ path: 'empty.md' })).resolves.toMatchObject({ ok: true, data: { content: '' } });
+    await expect(stub.getVaultFileOutline({ path: 'empty.md' })).resolves.toMatchObject({ ok: true, data: { totalLines: 0, headings: [] } });
+    for (const range of [{ startLine: 1 }, { endLine: 1 }, { startLine: 1, endLine: 1 }]) {
+      await expect(stub.readVaultFile({ path: 'empty.md', ...range })).resolves.toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+    }
+  });
+
+  it('returns actionable maintenance errors for malformed retained metadata without deleting chunks', async () => {
+    const { name, stub } = await seededVault('malformed-maintenance');
+    const chunk = await stub.putDocument(name, { _id: 'h:malformed-orphan', type: 'leaf', data: 'keep' });
+    const responses = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const sql = instance['ctx'].storage.sql;
+      const original = sql.exec<{ json: string }>('SELECT json FROM "document-store" WHERE id=?', 'notes/frontmatter.md').one().json;
+      const malformed = ['{', 'null', '42', '{}', JSON.stringify({ rev_tree: [null] }), JSON.stringify({ rev_tree: [{ pos: 1, ids: ['hash', null, []] }] })];
+      const results = [];
+      try {
+        for (const json of malformed) {
+          sql.exec('UPDATE "document-store" SET json=? WHERE id=?', json, 'notes/frontmatter.md');
+          const response = await instance.fetch(new Request('https://livesync.invalid/_purge', { method: 'POST', headers: { 'x-pouchdb-database': name }, body: JSON.stringify({ 'h:malformed-orphan': [chunk.rev] }) }));
+          results.push({ status: response.status, body: await response.json() });
+        }
+      } finally {
+        sql.exec('UPDATE "document-store" SET json=? WHERE id=?', original, 'notes/frontmatter.md');
+      }
+      return results;
+    });
+    for (const response of responses) expect(response).toMatchObject({ status: 503, body: { error: 'maintenance_unavailable', reason: expect.stringContaining('pause writers') } });
+    await expect(stub.getDocument(name, 'h:malformed-orphan')).resolves.toMatchObject({ data: 'keep' });
+  });
+
+  it('uses full scan batches for sparse small-limit feeds without skipping unreturned matches', async () => {
+    const { name, stub } = await seededVault('sparse-batches');
+    const observed = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const db = instance['database']();
+      const since = Number((await db.info()).update_seq);
+      for (let index = 0; index < 65; index++) await instance.putDocument(name, { _id: `sparse-${index}`, selected: index >= 31 });
+      const changes = db.changes.bind(db);
+      const sizes: number[] = [];
+      db.changes = ((options: PouchDB.Core.ChangesOptions) => { sizes.push(options.doc_ids?.length ?? 0); return changes(options); }) as typeof db.changes;
+      const page = async (checkpoint: number) => {
+        const response = await instance.fetch(new Request(`https://livesync.invalid/_changes?since=${checkpoint}&limit=1`, { method: 'POST', headers: { 'x-pouchdb-database': name }, body: JSON.stringify({ selector: { selected: true } }) }));
+        return await response.json() as { results: Array<{ id: string }>; last_seq: number };
+      };
+      try {
+        const first = await page(since); const firstSizes = [...sizes];
+        const second = await page(first.last_seq);
+        return { first, second, firstSizes };
+      } finally { db.changes = changes as typeof db.changes; }
+    });
+    expect(observed.firstSizes).toEqual([16, 16]);
+    expect(observed.first.results).toEqual([expect.objectContaining({ id: 'sparse-31' })]);
+    expect(observed.second.results).toEqual([expect.objectContaining({ id: 'sparse-32' })]);
+  });
+
   it('preserves both files when a composed copy/delete races a source edit', async () => {
     const { stub } = await seededVault('copy-delete');
     await stub.createVaultFile({ path: 'source.md', content: 'original' });

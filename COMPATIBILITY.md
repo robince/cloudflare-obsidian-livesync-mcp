@@ -148,3 +148,10 @@ conflict metadata and index checkpoint update transactionally. Persisted cursor
 generations survive object restart and change on indexed mutations or rebuilds.
 See the [MCP interface](apps/cloudflare-obsidian-mcp/README.md) for query typing,
 pagination and bounded outline semantics.
+
+Descending `_changes` pages use a positive `since` as an exclusive upper
+sequence bound; omitted/zero starts from the newest sequence. This deliberately
+supports resumable reverse pages despite the pinned PouchDB API ignoring
+`since` in descending mode. On an exhausted page, `last_seq` retains the caller
+checkpoint. Empty notes support full reads and empty outlines, but have no
+valid inclusive line range; ranged reads return `invalid_input`.

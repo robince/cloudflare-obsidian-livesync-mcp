@@ -146,7 +146,7 @@ export class LiveSyncVault {
       if (parsed.data.startLine !== undefined || parsed.data.endLine !== undefined) {
         const lines = fileLines(file.content);
         const start = parsed.data.startLine ?? 1;
-        if (start > Math.max(1, lines.length)) return failure('invalid_input', 'startLine exceeds the file line count.');
+        if (start > lines.length) return failure('invalid_input', 'startLine exceeds the file line count.');
         const end = Math.min(parsed.data.endLine ?? lines.length, lines.length);
         return success({ path: parsed.data.path, revision: file.revision, content: lines.slice(start - 1, end).join(''),
           startLine: start, endLine: end, totalLines: lines.length, partial: start > 1 || end < lines.length });

@@ -20,13 +20,19 @@ export async function chunkReferences(db: PouchDB.Database<JsonObject>, sql: Sql
       after = row.id;
       if (row.id.startsWith('h:')) { if (!references.has(row.id)) references.set(row.id, 0); continue; }
       if (row.id.startsWith('_design/')) continue;
-      const metadata = JSON.parse(row.json) as { rev_tree: Array<{ pos: number; ids: unknown }> };
-      if (!Array.isArray(metadata.rev_tree)) unsafe();
-      const stack = metadata.rev_tree.map((root) => ({ pos: root.pos, node: root.ids }));
+      let metadata: { rev_tree?: Array<{ pos: number; ids: unknown }> };
+      try { metadata = JSON.parse(row.json); } catch { unsafe(); }
+      if (!metadata || typeof metadata !== 'object' || !Array.isArray(metadata.rev_tree)) unsafe();
+      const stack = metadata.rev_tree.map((root) => {
+        if (!root || !Number.isSafeInteger(root.pos) || root.pos < 1) unsafe();
+        return { pos: root.pos, node: root.ids };
+      });
       while (stack.length) {
         if (++examined > 20_000 || Date.now() > deadline) unsafe();
         const { pos, node } = stack.pop()!;
-        if (!Array.isArray(node) || node.length !== 3 || !Array.isArray(node[2])) unsafe();
+        if (!Array.isArray(node) || node.length !== 3 || !Array.isArray(node[2])
+          || typeof node[0] !== 'string' || !node[0]
+          || !node[1] || typeof node[1] !== 'object' || Array.isArray(node[1])) unsafe();
         const [hash, options, children] = node as [string, { status?: string }, unknown[]];
         if (options.status === 'available') {
           let doc: JsonObject;

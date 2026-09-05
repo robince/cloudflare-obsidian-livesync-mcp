@@ -268,6 +268,23 @@ describe('replication and maintenance regressions', () => {
     expect(complete.results).toHaveLength(130);
     const descending = await (await couchFetch(`/${name}/_changes?descending=true`)).json() as typeof complete;
     expect(descending.results.map((row) => row.id)).toEqual(complete.results.map((row) => row.id).reverse());
+    for (const filtered of [false, true]) {
+      let checkpoint = 0;
+      let pending = Infinity;
+      const ids: string[] = [];
+      for (let page = 0; page < 100 && pending > 0; page++) {
+        const result = await (await couchFetch(`/${name}/_changes?descending=true&limit=3&since=${checkpoint}`, {
+          method: 'POST', body: JSON.stringify(filtered ? { selector: { chosen: true } } : {}),
+        })).json() as { results: Array<{ id: string }>; last_seq: number; pending: number };
+        expect(result.results.length).toBeLessThanOrEqual(3);
+        expect(result.pending).toBeLessThan(pending);
+        ids.push(...result.results.map((row) => row.id)); checkpoint = result.last_seq; pending = result.pending;
+      }
+      const expected = complete.results.filter((_, index) => !filtered || index % 17 === 0).map((row) => row.id).reverse();
+      expect(ids).toEqual(expected);
+      const exhausted = await (await couchFetch(`/${name}/_changes?descending=true&since=${checkpoint}`)).json();
+      expect(exhausted).toMatchObject({ results: [], last_seq: checkpoint, pending: 0 });
+    }
     let since = 0;
     const seen: string[] = [];
     for (let page = 0; page < 10; page++) {
