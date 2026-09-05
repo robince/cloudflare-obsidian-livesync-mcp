@@ -1,3 +1,4 @@
+import { diagnostic } from './diagnostics';
 import { backupRoute } from './backup/routes';
 import { authenticate } from './auth';
 import { couchError, json, readJson } from './http';
@@ -26,10 +27,11 @@ export default {
         response = json({ status: 'ok' });
       } else {
         const authFailure = await authenticate(request, env);
+        if (authFailure) diagnostic({ event: 'operation_end', operation: 'auth', outcome: 'error', status: authFailure.status });
         response = authFailure ?? (await routeAuthenticated(request, url, env));
       }
     } catch (error) {
-      console.error(JSON.stringify({ level: 'error', message: 'request failed', error: String(error) }));
+      diagnostic({ event: 'request_error', operation: 'request', outcome: 'exception', status: 500 });
       response = couchError(500, 'internal_server_error', 'Internal server error.');
     }
     return withCors(response, env, origin);
