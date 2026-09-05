@@ -278,6 +278,7 @@ Follow pagination cursors until absent when exhaustive results are needed. Resta
   return server;
 }
 
+/** The Worker passes its environment allowlist explicitly; missing configuration denies access. */
 function resolveToolAuth(auth: VaultToolAuth) {
   const allowedUserIds = auth.allowedUserIds ?? new Set<string>();
   return {

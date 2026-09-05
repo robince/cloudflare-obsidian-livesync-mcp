@@ -125,7 +125,7 @@ describe('MCP to storage Durable Object integration', () => {
     expect(batch).toMatchObject({ structuredContent: { files: [
       { result: { ok: true, data: { content: fixture.files['notes/unicode-雪.md'] } } },
       { result: { ok: false, error: { code: 'not_found' } } },
-      { result: { ok: true, data: { startLine: 1, endLine: 1 } } },
+      { result: { ok: true, data: { startLine: 1, endLine: 1, content: '# Unicode\n' } } },
       { result: { ok: false, error: { code: 'revision_conflict' } } },
     ] } });
     const readWithText = await client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md' } });
@@ -133,7 +133,7 @@ describe('MCP to storage Durable Object integration', () => {
     expect(textBlock?.type === 'text' && JSON.parse(textBlock.text)).toEqual(readWithText.structuredContent);
     const outlineResult = await client.callTool({ name: 'get_file_outline', arguments: { path: 'notes/unicode-雪.md' } });
     expect(outlineResult).toMatchObject({ structuredContent: { path: 'notes/unicode-雪.md', revision: expect.any(String), headings: expect.any(Array) } });
-    await expect(client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md', startLine: 1, endLine: 1 } })).resolves.toMatchObject({ structuredContent: { startLine: 1, endLine: 1, totalLines: expect.any(Number) } });
+    await expect(client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md', startLine: 1, endLine: 1 } })).resolves.toMatchObject({ structuredContent: { startLine: 1, endLine: 1, content: '# Unicode\n', totalLines: expect.any(Number) } });
     await expect(client.callTool({ name: 'search_files', arguments: { filters: [{ property: 'title', operator: 'eq', value: 'MCP fixture' }], properties: ['title'] } })).resolves.toMatchObject({ structuredContent: { results: [expect.objectContaining({ path: 'notes/frontmatter.md', properties: { title: 'MCP fixture' } })] } });
     await expect(client.callTool({ name: 'read_frontmatter', arguments: { path: 'notes/frontmatter.md' } })).resolves.toMatchObject({
       structuredContent: { frontmatter: { title: 'MCP fixture' } },
