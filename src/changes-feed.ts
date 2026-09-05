@@ -103,10 +103,14 @@ export async function* changesFeed(
 export function streamChanges(
   iterator: AsyncGenerator<JsonObject, { last_seq: number; pending: number }>,
   first: IteratorResult<JsonObject, { last_seq: number; pending: number }>, continuous: boolean,
+  onComplete?: (outcome: 'success' | 'error' | 'cancelled', returnedChanges: number) => void,
 ): Response {
   const encoder = new TextEncoder();
   let next = first;
   let started = false;
+  let returnedChanges = 0;
+  let finished = false;
+  const finish = (outcome: 'success' | 'error' | 'cancelled') => { if (!finished) { finished = true; onComplete?.(outcome, returnedChanges); } };
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
@@ -114,14 +118,16 @@ export function streamChanges(
           controller.enqueue(encoder.encode(continuous ? `${JSON.stringify(next.value)}\n`
             : `${started ? '' : '{"results":['}],"last_seq":${next.value.last_seq},"pending":${next.value.pending}}`));
           controller.close();
+          finish('success');
           return;
         }
         controller.enqueue(encoder.encode(`${continuous ? '' : started ? ',' : '{"results":['}${JSON.stringify(next.value)}${continuous ? '\n' : ''}`));
+        returnedChanges++;
         started = true;
         next = await iterator.next();
-      } catch (error) { controller.error(error); await iterator.return({ last_seq: 0, pending: 0 }); }
+      } catch (error) { finish('error'); controller.error(error); await iterator.return({ last_seq: 0, pending: 0 }); }
     },
-    async cancel() { await iterator.return({ last_seq: 0, pending: 0 }); },
+    async cancel() { finish('cancelled'); await iterator.return({ last_seq: 0, pending: 0 }); },
   });
   return new Response(stream, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }

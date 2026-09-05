@@ -57,6 +57,12 @@ path. Do not promise that every vault or initial import fits the free tier.
 - Publish troubleshooting, supported client versions and an upgrade/rollback
   procedure. Retain compatibility tests when upgrading Commonlib/PouchDB and
   upstream the small compatibility patches where practical.
+- Add a local, content-free support diagnostic bundle for users running in their
+  own Cloudflare accounts: platform usage, awake-duration estimates, SQLite
+  reads/writes, paid-cost/free-quota reporting and live-versus-periodic sync
+  comparisons, alongside safe events, historical error retrieval and bounded live
+  capture. Implemented locally; see the [runbook](support-diagnostics.md) for
+  privacy boundaries, permissions and outstanding staging validation.
 
 Exit: a new user can deploy from the documentation without sibling repositories
 or undocumented operator steps, and can independently enable MCP.

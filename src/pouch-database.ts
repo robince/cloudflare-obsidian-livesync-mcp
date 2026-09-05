@@ -1,3 +1,4 @@
+import { diagnostic, operationFor } from './diagnostics';
 import { exportTables, importTables, verifyBackup, readManifest, directory, prune } from './backup/storage';
 import { fail, DATABASE_NAME, TABLES } from './backup/format';
 import type { GetVaultFileOutlineRequest, GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
@@ -184,13 +185,13 @@ export class PouchDatabase extends DurableObject<Env> {
       this.setMeta('backup_status', JSON.stringify(state));
       await this.env.BACKUP_BUCKET.put(`${directory(name, manifest.id)}manifest.json`, JSON.stringify(manifest));
       this.setMeta('backup_status', JSON.stringify({ lastAttempt: state.lastAttempt, lastSuccess: manifest.createdAt, bytes: manifest.bytes, id: manifest.id }));
-      console.log(JSON.stringify({ message: 'backup completed', id: manifest.id, bytes: manifest.bytes, pauseMs: manifest.pauseMs }));
+      diagnostic({ event: 'backup_end', operation: 'backup', outcome: 'success', bytes: manifest.bytes, pauseMs: manifest.pauseMs });
       try { await prune(this.env.BACKUP_BUCKET, name, policy); }
       catch { this.setMeta('backup_status', JSON.stringify({ lastAttempt: state.lastAttempt, lastSuccess: manifest.createdAt, bytes: manifest.bytes, id: manifest.id, error: 'Backup completed but retention cleanup failed' })); }
       return manifest;
     } catch (error) {
       this.setMeta('backup_status', JSON.stringify({ ...state, error: error instanceof Error ? error.message : 'Backup failed' }));
-      console.error(JSON.stringify({ message: 'backup failed' }));
+      diagnostic({ event: 'backup_end', operation: 'backup', outcome: 'error' });
       throw error;
     } finally { cancelled = true; if (timer) clearTimeout(timer); this.backupActive = false; this.backupJob = false; }
   }
@@ -408,8 +409,15 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const started = performance.now();
+    const operation = operationFor(new URL(request.url).pathname, request.method);
+    const completed = (response: Response) => {
+      // Changes streams emit their own completion after consumption.
+      if (operation !== 'changes' || response.status >= 400) diagnostic({ event: 'operation_end', operation, status: response.status, outcome: response.status >= 400 ? 'error' : 'success', durationMs: Math.round(performance.now() - started) });
+      return response;
+    };
     const name = request.headers.get('x-pouchdb-database');
-    if (!name) return couchError(400, 'bad_request', 'database name is required');
+    if (!name) return completed(couchError(400, 'bad_request', 'database name is required'));
     try {
       if (this.meta('restore_state')) fail('Restore target unavailable', 503);
       const parts = new URL(request.url).pathname.split('/').filter(Boolean).map(decodeURIComponent);
@@ -417,11 +425,11 @@ export class PouchDatabase extends DurableObject<Env> {
       const readPost = ['_changes', '_all_docs', '_bulk_get', '_revs_diff', '_find', '_index', '_ensure_full_commit'].includes(first ?? '');
       const mutate = !['GET', 'HEAD', 'OPTIONS'].includes(request.method) && !(request.method === 'POST' && readPost);
       if (first === '_purge' || (!first && request.method === 'DELETE')) {
-        return await this.withSearchLifecycle(() => this.withMutation(() => this.route(request, name, parts)));
+        return completed(await this.withSearchLifecycle(() => this.withMutation(() => this.route(request, name, parts))));
       }
-      return mutate ? await this.withMutation(() => this.route(request, name, parts)) : await this.route(request, name, parts);
+      return completed(mutate ? await this.withMutation(() => this.route(request, name, parts)) : await this.route(request, name, parts));
     } catch (error) {
-      return pouchError(error);
+      return completed(pouchError(error));
     }
   }
 
@@ -533,6 +541,9 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   private async changesRoute(request: Request, url: URL, db: AnyDatabase): Promise<Response> {
+    const started = performance.now();
+    const requestId = crypto.randomUUID();
+    const longpoll = url.searchParams.get('feed') === 'longpoll';
     const body = request.method === 'POST' ? await readJson<ChangesRequest>(request) : {};
     const value = url.searchParams.get('since') ?? '0';
     if (value !== 'now' && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) throw badRequest('Invalid since sequence');
@@ -542,12 +553,21 @@ export class PouchDatabase extends DurableObject<Env> {
     if (url.searchParams.get('feed') === 'longpoll' && first.done) {
       const resume = first.value.last_seq;
       this.activeChangeLongpolls++;
-      try { await waitForChange(db, resume, Math.min(numberParam(url, 'timeout') ?? 25_000, 55_000), request.signal); }
-      finally { this.activeChangeLongpolls--; }
+      const waitStarted = performance.now();
+      const concurrentWaits = this.activeChangeLongpolls;
+      let reason: 'change' | 'timeout' | 'cancelled' | 'error' = 'error';
+      try { reason = await waitForChange(db, resume, Math.min(numberParam(url, 'timeout') ?? 25_000, 55_000), request.signal); }
+      catch (error) { reason = request.signal.aborted ? 'cancelled' : 'error'; throw error; }
+      finally {
+        this.activeChangeLongpolls--;
+        diagnostic({ event: 'changes_wait', operation: 'changes', requestId, outcome: reason === 'error' ? 'error' : reason === 'cancelled' ? 'cancelled' : 'success', reason, waitMs: Math.round(performance.now() - waitStarted), concurrentWaits });
+      }
       iterator = changesFeed(db, this.ctx.storage.sql, url, body, resume, request.signal);
       first = await iterator.next();
     }
-    return streamChanges(iterator, first, url.searchParams.get('feed') === 'continuous');
+    return streamChanges(iterator, first, url.searchParams.get('feed') === 'continuous', (outcome, returnedChanges) => {
+      diagnostic({ event: 'changes_end', operation: 'changes', requestId, outcome, longpoll, returnedChanges, empty: returnedChanges === 0, durationMs: Math.round(performance.now() - started) });
+    });
   }
 
   private async findRoute(request: Request, db: AnyDatabase): Promise<Response> {
@@ -732,22 +752,22 @@ async function waitForChange(
   since: string | number,
   timeoutMs: number,
   signal: AbortSignal,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+): Promise<'change' | 'timeout'> {
+  return new Promise<'change' | 'timeout'>((resolve, reject) => {
     const feed = db.changes({ since, live: true, return_docs: false });
     let settled = false;
-    const finish = (error?: unknown) => {
+    const finish = (reason: 'change' | 'timeout', error?: unknown) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       signal.removeEventListener('abort', abort);
       feed.cancel();
-      error === undefined ? resolve() : reject(error);
+      error === undefined ? resolve(reason) : reject(error);
     };
-    const abort = () => finish(signal.reason ?? new DOMException('Aborted', 'AbortError'));
-    const timer = setTimeout(() => finish(), timeoutMs);
-    feed.once('change', () => finish());
-    feed.once('error', (error: unknown) => finish(error));
+    const abort = () => finish('timeout', signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    const timer = setTimeout(() => finish('timeout'), timeoutMs);
+    feed.once('change', () => finish('change'));
+    feed.once('error', (error: unknown) => finish('timeout', error));
     signal.addEventListener('abort', abort, { once: true });
     if (signal.aborted) abort();
   });

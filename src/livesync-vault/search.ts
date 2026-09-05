@@ -1,3 +1,4 @@
+import { diagnostic } from '../diagnostics';
 import { readFrontmatter } from './frontmatter';
 import { normalizeProperties, propertyPredicate } from './property-query';
 import { frontmatterFilterSchema } from '@cloudflare-obsidian-livesync/contracts';
@@ -89,7 +90,7 @@ export class LiveSyncSearch {
       }
     } catch (error) {
       if (error instanceof SearchInputError) return failure(error.code, error.message);
-      console.error(JSON.stringify({ message: 'search_files failed', error: errorMessage(error) }));
+      diagnostic({ event: 'search_error', operation: 'search_files', outcome: 'error' });
       return failure('internal', 'Search is temporarily unavailable.');
     }
   }
