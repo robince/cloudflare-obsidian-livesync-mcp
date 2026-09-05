@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { VAULT_LIMITS } from '@cloudflare-obsidian-livesync/contracts';
 
-import { allowedGithubLogins, normalizeGithubLogin } from '../src/auth-utils';
+import { allowedGithubUserIds, normalizeGithubLogin } from '../src/auth-utils';
 import {
   accessTokenScopes,
   appendFileInput,
@@ -22,7 +22,7 @@ import type { VaultRpc } from '../src/vault-rpc';
 
 const fakeRpc: VaultRpc = {
   async vaultStatus() {
-    return { ok: true, data: { contractVersion: 4, compatible: true, reasons: [] } };
+    return { ok: true, data: { contractVersion: 5, compatible: true, reasons: [] } };
   },
   async listVaultFiles() {
     return { ok: true, data: { files: [{ path: 'notes/a.md', revision: '1-a', sizeBytes: 4, modifiedAt: 2 }] } };
@@ -41,6 +41,7 @@ const fakeRpc: VaultRpc = {
   async listVaultAttachments() {
     return { ok: true, data: { attachments: [{ path: 'assets/a.png', revision: '1-png', mimeType: 'image/png', sizeBytes: 3 }] } };
   },
+  async getVaultFileOutline({ path }) { return { ok: true, data: { path, revision: '1-a', totalLines: 1, headings: [] } }; },
   async readVaultFile({ path }) {
     return { ok: true, data: { path, revision: '1-a', content: '# A\n' } };
   },
@@ -77,6 +78,7 @@ describe('MCP vault surface', () => {
       'list_files',
       'search_files',
       'read_file',
+      'get_file_outline',
       'read_frontmatter',
       'list_attachments',
       'read_attachment',
@@ -91,7 +93,7 @@ describe('MCP vault surface', () => {
     const enabled = createVaultMcpServer(fakeRpc, { writesEnabled: true });
     const registered = (server: unknown) => Object.keys((server as { _registeredTools: object })._registeredTools);
     expect(registered(disabled)).toEqual([
-      'vault_status', 'list_files', 'search_files', 'read_file', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
     ]);
     expect(registered(enabled)).toEqual(VAULT_TOOL_NAMES);
   });
@@ -154,7 +156,7 @@ describe('MCP vault surface', () => {
       canWrite: () => true,
     });
     await expect(allowed.vaultStatus()).resolves.toMatchObject({
-      structuredContent: { contractVersion: 4, compatible: true },
+      structuredContent: { contractVersion: 5, compatible: true },
     });
     await expect(allowed.listFiles({})).resolves.toMatchObject({
       structuredContent: { files: [{ path: 'notes/a.md' }] },
@@ -210,8 +212,8 @@ describe('MCP vault surface', () => {
   });
 
   it('registers tools and denies the default auth context', async () => {
-    expect(() => createVaultMcpServer(fakeRpc, { allowedLogins: new Set(['robince']) })).not.toThrow();
-    const handlers = createVaultToolHandlers(fakeRpc, { allowedLogins: new Set(['robince']) });
+    expect(() => createVaultMcpServer(fakeRpc, { allowedUserIds: new Set(['12345']) })).not.toThrow();
+    const handlers = createVaultToolHandlers(fakeRpc, { allowedUserIds: new Set(['12345']) });
     await expect(handlers.vaultStatus()).resolves.toMatchObject({ isError: true });
   });
 
@@ -250,17 +252,23 @@ describe('MCP vault surface', () => {
 describe('GitHub allowlist', () => {
   it('normalizes logins and remains deny-by-default', () => {
     expect(normalizeGithubLogin('  RobinCE  ')).toBe('robince');
-    expect(allowedGithubLogins(undefined).size).toBe(0);
-    expect(allowedGithubLogins('')).toEqual(new Set());
-    expect(allowedGithubLogins('RobinCE, OTHER\nthird')).toEqual(new Set(['robince', 'other', 'third']));
+    expect(allowedGithubUserIds(undefined).size).toBe(0);
+    expect(allowedGithubUserIds('')).toEqual(new Set());
+    expect(allowedGithubUserIds('12345, 67890\n23456')).toEqual(new Set(['12345', '67890', '23456']));
+    expect(allowedGithubUserIds('12345, robince').size).toBe(0);
+    expect(allowedGithubUserIds('0').size).toBe(0);
+    expect(allowedGithubUserIds('99999999999999999999').size).toBe(0);
   });
 
   it('re-checks the allowlist at tool execution', () => {
-    const props = { githubLogin: 'robince', scopes: ['vault:read'] };
-    expect(hasVaultAccess(props, new Set(['robince']))).toBe(true);
+    const props = { githubUserId: '12345', githubLogin: 'robince', scopes: ['vault:read'] };
+    expect(hasVaultAccess(props, new Set(['12345']))).toBe(true);
     expect(hasVaultAccess(props, new Set())).toBe(false);
-    expect(hasVaultAccess({ githubLogin: 'robince', scopes: [] }, new Set(['robince']))).toBe(false);
-    expect(hasVaultAccess(props, new Set(['robince']), WRITE_SCOPE)).toBe(false);
+    expect(hasVaultAccess({ ...props, githubUserId: '67890' }, new Set(['12345']))).toBe(false);
+    expect(hasVaultAccess({ ...props, githubLogin: 'renamed' }, new Set(['12345']))).toBe(true);
+    expect(hasVaultAccess({ githubLogin: 'robince', scopes: ['vault:read'] }, new Set(['12345']))).toBe(false);
+    expect(hasVaultAccess({ githubLogin: 'robince', scopes: [] }, new Set(['12345']))).toBe(false);
+    expect(hasVaultAccess(props, new Set(['12345']), WRITE_SCOPE)).toBe(false);
   });
 
   it('does not let a read-only token exchange keep write scope', () => {
@@ -270,5 +278,31 @@ describe('GitHub allowlist', () => {
     expect(accessTokenScopes(grant, undefined)).toEqual(['vault:read', 'vault:write']);
     expect(accessTokenScopes(grant, [])).toEqual([]);
     expect(accessTokenScopes(grant, ['unknown'])).toEqual([]);
+  });
+});
+
+
+describe('MCP result and query contracts', () => {
+  it('returns text fallback data and accurate annotations', async () => {
+    const handlers = createVaultToolHandlers(fakeRpc, { canRead: () => true });
+    const result = await handlers.readFile({ path: 'notes/a.md' });
+    expect(result).toHaveProperty('structuredContent');
+    if ('structuredContent' in result) expect(JSON.parse(result.content[0].text)).toEqual(result.structuredContent);
+    const server = createVaultMcpServer(fakeRpc, { writesEnabled: true });
+    const tools = (server as unknown as { _registeredTools: Record<string, { annotations: object }> })._registeredTools;
+    expect(tools.get_file_outline.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+    expect(tools.create_file.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
+    expect(tools.edit_file.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
+  });
+
+  it('rejects expressions, coercion and invalid ISO dates at the query boundary', () => {
+    for (const filter of [
+      { property: 'due', operator: 'lt', type: 'date', value: '2026-02-30' },
+      { property: 'n', operator: 'lt', type: 'number', value: '10' },
+      { property: 'n', operator: 'regex', value: '*' },
+      { property: 'n', operator: 'exists', value: 'true' },
+    ]) expect(searchFilesInput.safeParse({ filters: [filter] }).success).toBe(false);
+    expect(searchFilesInput.safeParse({ filters: [] }).success).toBe(false);
+    expect(searchFilesInput.safeParse({ filters: [{ property: 'status', operator: 'eq', value: 'open' }] }).success).toBe(true);
   });
 });

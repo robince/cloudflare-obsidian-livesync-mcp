@@ -117,7 +117,7 @@ does not need the CouchDB URL or password. Before its first deployment:
    ```
 
    Set its non-secret `vars`: `GITHUB_CLIENT_ID`, `VAULT_DATABASE`,
-   `MCP_PUBLIC_BASE_URL`, `GITHUB_ALLOWED_LOGINS`, and `MCP_WRITES_ENABLED`.
+   `MCP_PUBLIC_BASE_URL`, `GITHUB_ALLOWED_USER_IDS`, and `MCP_WRITES_ENABLED`.
    Use `false` for an initial read-only test. If you rename the storage Worker,
    update this file's `POUCH_DATABASES` binding `script_name` to match.
 3. Copy `apps/cloudflare-obsidian-mcp/.dev.vars.example` to
@@ -157,3 +157,9 @@ secret binding; do not substitute a placeholder or delete the live secret first.
 References: [workers.dev URLs](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/),
 [configuration best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/),
 and [Wrangler type generation](https://developers.cloudflare.com/workers/wrangler/commands/workers/#types).
+
+For upgrades, replace the old login allowlist with immutable account IDs; an
+absent/invalid ID allowlist denies access, with no username fallback. Obtain and
+verify IDs with `gh api user --jq '{login, id}'` and the GitHub users API. See
+[contract 5 migration](apps/cloudflare-obsidian-mcp/README.md#upgrade-to-contract-5)
+for token compatibility and configuration examples.

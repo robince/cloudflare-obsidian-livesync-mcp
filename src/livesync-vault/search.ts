@@ -1,3 +1,6 @@
+import { readFrontmatter } from './frontmatter';
+import { normalizeProperties, propertyPredicate } from './property-query';
+import { frontmatterFilterSchema } from '@cloudflare-obsidian-livesync/contracts';
 import type PouchDB from 'pouchdb-core';
 import {
   searchVaultFilesRequestSchema,
@@ -11,7 +14,7 @@ import type { JsonObject } from '../types';
 import type { CommonlibFacade } from './commonlib';
 import type { VaultProfileInspection } from './profile';
 
-const SEARCH_SCHEMA_VERSION = '2';
+const SEARCH_SCHEMA_VERSION = '3';
 const SEARCH_CATCHUP_MS = 3_000;
 const SEARCH_CHANGES_PAGE = 100;
 
@@ -40,9 +43,10 @@ type SearchRow = {
   revision: string;
   unresolved_versions: number;
   snippet: string;
+  frontmatter: string;
 };
 
-type CatchUpResult = 'ready' | 'catching_up' | 'pending_chunks';
+type CatchUpResult = 'ready' | 'catching_up' | { pendingPath: string };
 
 export class LiveSyncSearch {
   constructor(private readonly dependencies: SearchDependencies) {}
@@ -70,25 +74,21 @@ export class LiveSyncSearch {
           commonlib ??= await this.dependencies.acquireCommonlib(profile);
           return commonlib;
         });
-        if (catchUp === 'pending_chunks') {
-          return failure('unavailable', 'Search is waiting for referenced LiveSync chunks. Retry after replication completes.');
+        if (typeof catchUp === 'object') {
+          return failure('unavailable', `Search is waiting for referenced LiveSync chunks for ${catchUp.pendingPath}. Complete replication or repair this note in Obsidian before retrying.`);
         }
         if (catchUp === 'catching_up') {
           return failure('unavailable', 'Search index is catching up with LiveSync changes. Retry search_files.');
         }
         return {
           ok: true,
-          data: this.query(
-            parsed.data.query,
-            pathPrefix,
-            parsed.data.limit,
-            profile.handleFilenameCaseSensitive,
-          ),
+          data: await this.query(parsed.data, profile.handleFilenameCaseSensitive),
         };
       } finally {
         if (commonlib) await commonlib.close();
       }
     } catch (error) {
+      if (error instanceof SearchInputError) return failure(error.code, error.message);
       console.error(JSON.stringify({ message: 'search_files failed', error: errorMessage(error) }));
       return failure('internal', 'Search is temporarily unavailable.');
     }
@@ -99,6 +99,7 @@ export class LiveSyncSearch {
     this.dependencies.storage.transactionSync(() => {
       for (const documentId of documentIds) this.deleteDocument(documentId);
       this.setState('checkpoint', '0');
+      this.bumpGeneration();
     });
   }
 
@@ -122,7 +123,10 @@ export class LiveSyncSearch {
       revision TEXT NOT NULL,
       unresolved_versions INTEGER NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('indexed', 'excluded')),
-      exclusion_reason TEXT
+      exclusion_reason TEXT,
+      frontmatter TEXT NOT NULL DEFAULT '{}',
+      dates TEXT NOT NULL DEFAULT '{}',
+      properties_valid INTEGER NOT NULL DEFAULT 1
     )`);
     sql.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS livesync_search_fts USING fts5(
       path,
@@ -131,6 +135,7 @@ export class LiveSyncSearch {
       tokenize='unicode61 remove_diacritics 2'
     )`);
     this.setState('schema_version', SEARCH_SCHEMA_VERSION);
+    if (!this.state('generation')) this.bumpGeneration();
     if (this.state('checkpoint') === undefined) this.setState('checkpoint', '0');
   }
 
@@ -147,6 +152,7 @@ export class LiveSyncSearch {
       this.dependencies.storage.sql.exec('DELETE FROM livesync_search_documents');
       this.setState('database_id', databaseId);
       this.setState('checkpoint', '0');
+      this.bumpGeneration();
     });
   }
 
@@ -213,6 +219,7 @@ export class LiveSyncSearch {
           && existing.path === path
           && (existing.status === 'excluded' || existing.fts_present === 1)) {
           this.dependencies.storage.transactionSync(() => {
+            if (existing.unresolved_versions !== unresolvedVersions) this.bumpGeneration();
             this.dependencies.storage.sql.exec(
               'UPDATE livesync_search_documents SET unresolved_versions=? WHERE doc_id=?',
               unresolvedVersions,
@@ -225,7 +232,7 @@ export class LiveSyncSearch {
         }
 
         const file = await (await commonlib()).readWinningForSearch(path, VAULT_LIMITS.maxReadBytes);
-        if (file.kind === 'pending') return 'pending_chunks';
+        if (file.kind === 'pending') return { pendingPath: path };
         if (file.kind === 'missing') {
           this.commitDelete(change.id, changeSequence);
         } else if (file.kind === 'excluded') {
@@ -239,53 +246,82 @@ export class LiveSyncSearch {
     return checkpoint >= target ? 'ready' : 'catching_up';
   }
 
-  private query(
-    query: string,
-    pathPrefix: string,
-    requestedLimit: number | undefined,
-    caseSensitive: boolean,
-  ): SearchVaultFilesData {
-    const limit = requestedLimit ?? VAULT_LIMITS.defaultSearchLimit;
-    const match = query.trim().split(/\s+/u).map((term) => `"${term.replaceAll('"', '""')}"`).join(' ');
-    const prefixColumn = caseSensitive ? 'd.path' : 'd.path_folded';
-    const comparablePrefix = caseSensitive ? pathPrefix : pathPrefix.toLowerCase();
+  private async query(request: SearchVaultFilesRequest, caseSensitive: boolean): Promise<SearchVaultFilesData> {
+    const limit = request.limit ?? VAULT_LIMITS.defaultSearchLimit;
+    const query = request.query?.trim();
+    const pathPrefix = request.pathPrefix ?? '';
+    const fingerprintBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({
+      query, pathPrefix, filters: request.filters ?? [], properties: request.properties ?? [], caseSensitive,
+    })));
+    const fingerprint = Array.from(new Uint8Array(fingerprintBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const generation = this.state('generation')!;
+    const database = this.state('database_id')!;
+    let offset = 0;
+    if (request.cursor) {
+      let cursor: { v: number; generation: string; database: string; fingerprint: string; offset: number };
+      try {
+        cursor = JSON.parse(atob(request.cursor));
+        if (!cursor || cursor.v !== 1 || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0
+          || typeof cursor.generation !== 'string' || typeof cursor.database !== 'string'
+          || cursor.fingerprint !== fingerprint) throw new Error();
+      } catch { throw new SearchInputError('invalid_input', 'Invalid cursor or changed query. Restart search_files without a cursor.'); }
+      if (cursor.generation !== generation || cursor.database !== database) {
+        throw new SearchInputError('cursor_expired', 'Search results changed. Restart search_files without a cursor.');
+      }
+      offset = cursor.offset;
+    }
+    const predicates: string[] = ["d.status='indexed'"];
+    const bindings: (string | number | null)[] = [];
+    if (query) {
+      predicates.push('livesync_search_fts MATCH ?');
+      bindings.push(query.split(/\s+/u).map((term) => `"${term.replaceAll('"', '""')}"`).join(' '));
+    }
+    if (pathPrefix) {
+      predicates.push(`instr(d.${caseSensitive ? 'path' : 'path_folded'}, ?)=1`);
+      bindings.push(caseSensitive ? pathPrefix : pathPrefix.toLowerCase());
+    }
+    const propertyQuery = !!request.filters?.length || !!request.properties?.length;
+    if (propertyQuery) predicates.push('d.properties_valid=1');
+    for (const filter of request.filters ?? []) {
+      const predicate = propertyPredicate(filter);
+      predicates.push(predicate.sql);
+      bindings.push(...predicate.bindings);
+    }
     const rows = this.dependencies.storage.sql.exec<SearchRow>(
-      `SELECT d.path, d.revision, d.unresolved_versions,
-              snippet(livesync_search_fts, -1, '⟦', '⟧', '…', 24) AS snippet
-         FROM livesync_search_fts
-         JOIN livesync_search_documents d ON d.fts_rowid=livesync_search_fts.rowid
-        WHERE livesync_search_fts MATCH ?
-          AND d.status='indexed'
-          AND (?='' OR instr(${prefixColumn}, ?)=1)
-        ORDER BY bm25(livesync_search_fts, 4.0, 8.0, 1.0), d.path ASC
-        LIMIT ?`,
-      match,
-      comparablePrefix,
-      comparablePrefix,
-      limit + 1,
+      `SELECT d.path,d.revision,d.unresolved_versions,d.frontmatter,
+       ${query ? "snippet(livesync_search_fts,-1,'⟦','⟧','…',24)" : "''"} AS snippet
+       FROM livesync_search_documents d
+       ${query ? 'JOIN livesync_search_fts ON livesync_search_fts.rowid=d.fts_rowid' : ''}
+       WHERE ${predicates.join(' AND ')}
+       ORDER BY ${query ? 'bm25(livesync_search_fts,4.0,8.0,1.0),' : ''}d.path ASC LIMIT ? OFFSET ?`,
+      ...bindings, limit + 1, offset,
     ).toArray();
-    const unindexedFiles = this.dependencies.storage.sql
-      .exec<{ count: number }>("SELECT COUNT(*) AS count FROM livesync_search_documents WHERE status='excluded'")
-      .one().count;
+    const counts = this.dependencies.storage.sql.exec<{ excluded: number; invalid: number }>(
+      "SELECT COALESCE(SUM(status='excluded'),0) AS excluded, COALESCE(SUM(status='indexed' AND properties_valid=0),0) AS invalid FROM livesync_search_documents",
+    ).one();
     const results: SearchVaultFilesData['results'] = [];
-    let truncated = rows.length > limit;
+    const makeResponse = (more: boolean): SearchVaultFilesData => ({
+      results, truncated: more, incomplete: counts.excluded > 0 || (propertyQuery && counts.invalid > 0),
+      unindexedFiles: counts.excluded,
+      ...(propertyQuery ? { unqueryableFiles: counts.invalid } : {}),
+      ...(more ? { cursor: btoa(JSON.stringify({ v: 1, generation, database, fingerprint, offset: offset + results.length })) } : {}),
+    });
     for (const row of rows.slice(0, limit)) {
-      const result = {
-        path: row.path,
-        revision: row.revision,
+      const allProperties = JSON.parse(row.frontmatter) as Record<string, {} | null>;
+      results.push({ path: row.path, revision: row.revision,
         snippet: truncateUtf8(row.snippet, VAULT_LIMITS.maxSearchSnippetBytes),
         ...(row.unresolved_versions > 1 ? { unresolvedVersions: row.unresolved_versions } : {}),
-      };
-      const candidate = {
-        results: [...results, result], truncated, incomplete: unindexedFiles > 0, unindexedFiles,
-      };
-      if (utf8Bytes(JSON.stringify(candidate)) > VAULT_LIMITS.maxSearchResponseBytes) {
-        truncated = true;
-        break;
+        ...(request.properties ? { properties: Object.fromEntries(request.properties.filter((key) => Object.hasOwn(allProperties, key)).map((key) => [key, allProperties[key]])) } : {}),
+      });
+      const response = makeResponse(true);
+      // Include structured content and its serialized-text fallback in the budget.
+      if (utf8Bytes(JSON.stringify({ structuredContent: response, content: [{ type: 'text', text: JSON.stringify(response) }] })) > VAULT_LIMITS.maxSearchResponseBytes) {
+        results.pop();
+        if (!results.length) throw new SearchInputError('too_large', 'Selected properties exceed the response budget. Request fewer properties and read_frontmatter separately.');
+        return makeResponse(true);
       }
-      results.push(result);
     }
-    return { results, truncated, incomplete: unindexedFiles > 0, unindexedFiles };
+    return makeResponse(rows.length > results.length);
   }
 
   private document(documentId: string): SearchDocumentRow | undefined {
@@ -307,6 +343,15 @@ export class LiveSyncSearch {
   ): void {
     this.dependencies.storage.transactionSync(() => {
       const rowId = this.upsertDocument(documentId, path, revision, unresolvedVersions, 'indexed');
+      let properties: Record<string, unknown> = {};
+      let valid = 1;
+      try { properties = normalizeProperties(readFrontmatter(content)); } catch { valid = 0; }
+      const dates = Object.fromEntries(Object.entries(properties).filter(([property, value]) =>
+        frontmatterFilterSchema.safeParse({ property, value, operator: 'lt', type: 'date' }).success,
+      ).map(([key, value]) => [key, Date.parse(value as string)]));
+      this.dependencies.storage.sql.exec('UPDATE livesync_search_documents SET frontmatter=?,dates=?,properties_valid=? WHERE doc_id=?',
+        JSON.stringify(properties), JSON.stringify(dates), valid, documentId);
+      this.bumpGeneration();
       this.dependencies.storage.sql.exec('DELETE FROM livesync_search_fts WHERE rowid=?', rowId);
       this.dependencies.storage.sql.exec(
         'INSERT INTO livesync_search_fts(rowid, path, title, content) VALUES (?, ?, ?, ?)',
@@ -329,6 +374,7 @@ export class LiveSyncSearch {
   ): void {
     this.dependencies.storage.transactionSync(() => {
       const rowId = this.upsertDocument(documentId, path, revision, unresolvedVersions, 'excluded', reason);
+      this.bumpGeneration();
       this.dependencies.storage.sql.exec('DELETE FROM livesync_search_fts WHERE rowid=?', rowId);
       this.setState('checkpoint', String(checkpoint));
     });
@@ -345,6 +391,7 @@ export class LiveSyncSearch {
     const row = this.dependencies.storage.sql
       .exec<{ fts_rowid: number }>('SELECT fts_rowid FROM livesync_search_documents WHERE doc_id=?', documentId)
       .toArray()[0];
+    if (row) this.bumpGeneration();
     if (row) this.dependencies.storage.sql.exec('DELETE FROM livesync_search_fts WHERE rowid=?', row.fts_rowid);
     this.dependencies.storage.sql.exec('DELETE FROM livesync_search_documents WHERE doc_id=?', documentId);
   }
@@ -393,6 +440,8 @@ export class LiveSyncSearch {
     this.dependencies.storage.transactionSync(() => this.setState('checkpoint', String(checkpoint)));
   }
 
+  private bumpGeneration(): void { this.setState('generation', crypto.randomUUID()); }
+
   private checkpoint(): number {
     return sequence(this.state('checkpoint') ?? '0');
   }
@@ -413,7 +462,11 @@ export class LiveSyncSearch {
   }
 }
 
-function failure(code: 'invalid_input' | 'unsupported' | 'unavailable' | 'internal', message: string): VaultResult<never> {
+class SearchInputError extends Error {
+  constructor(readonly code: 'invalid_input' | 'cursor_expired' | 'too_large', message: string) { super(message); }
+}
+
+function failure(code: 'invalid_input' | 'cursor_expired' | 'too_large' | 'unsupported' | 'unavailable' | 'internal', message: string): VaultResult<never> {
   return { ok: false, error: { code, message } };
 }
 

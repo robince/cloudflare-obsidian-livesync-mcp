@@ -44,3 +44,23 @@ export function matchesSelector(doc: Record<string, unknown>, selector: Selector
   }
   return true;
 }
+
+/** Validate once at the protocol boundary, before scanning any documents. */
+export function validateSelector(selector: unknown, depth = 0): asserts selector is Selector {
+  const fail = () => { throw Object.assign(new Error('Unsupported or invalid Mango selector'), { status: 400, name: 'bad_request' }); };
+  if (!selector || typeof selector !== 'object' || Array.isArray(selector) || depth > 20) return fail();
+  for (const [key, value] of Object.entries(selector)) {
+    if (key === '$and' || key === '$or') {
+      if (!Array.isArray(value)) return fail();
+      for (const part of value) validateSelector(part, depth + 1);
+    } else if (key === '$not') validateSelector(value, depth + 1);
+    else if (key.startsWith('$')) return fail();
+    else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [op, operand] of Object.entries(value)) {
+        if (!['$eq', '$ne', '$lt', '$lte', '$gt', '$gte', '$exists', '$in', '$nin'].includes(op)) return fail();
+        if ((op === '$in' || op === '$nin') && !Array.isArray(operand)) return fail();
+        if (op === '$exists' && typeof operand !== 'boolean') return fail();
+      }
+    }
+  }
+}

@@ -23,7 +23,7 @@
     "VAULT_DATABASE": "test-vault",
     "MCP_PUBLIC_BASE_URL": "https://mcp.test",
     "MCP_WRITES_ENABLED": "false",
-    "GITHUB_ALLOWED_LOGINS": "robince",
+    "GITHUB_ALLOWED_USER_IDS": "12345",
     "GITHUB_CLIENT_ID": "github-client-test"
   }
 }

@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
 /** Incremented whenever the semantic vault RPC wire contract changes. */
-export const CONTRACT_VERSION = 4 as const;
+export const CONTRACT_VERSION = 5 as const;
 
 export const VAULT_LIMITS = {
+  maxMcpResponseBytes: 8 * 1024 * 1024,
   maxListLimit: 100,
   defaultListLimit: 50,
   maxReadBytes: 512_000,
@@ -26,6 +27,7 @@ export const VAULT_LIMITS = {
 } as const;
 
 export const vaultErrorCodeSchema = z.enum([
+  'cursor_expired',
   'invalid_input',
   'not_found',
   'unsupported',
@@ -39,7 +41,7 @@ export const vaultErrorCodeSchema = z.enum([
 
 export const vaultErrorSchema = z.discriminatedUnion('code', [
   z.object({
-    code: z.enum(['invalid_input', 'not_found', 'unsupported', 'too_large', 'unavailable', 'internal']),
+    code: z.enum(['cursor_expired', 'invalid_input', 'not_found', 'unsupported', 'too_large', 'unavailable', 'internal']),
     message: z.string(),
   }),
   z.object({
@@ -94,16 +96,31 @@ export const listVaultFilesDataSchema = z.object({
 });
 export type ListVaultFilesData = z.infer<typeof listVaultFilesDataSchema>;
 
+const propertyKey = z.string().min(1).max(256);
+const filterScalar = z.union([z.string().max(2048), z.number().finite(), z.boolean(), z.null()]);
+const orderedOperator = z.enum(['lt', 'lte', 'gt', 'gte']);
+export const frontmatterFilterSchema = z.union([
+  z.object({ property: propertyKey, operator: z.enum(['eq', 'ne', 'contains']), value: filterScalar }).strict(),
+  z.object({ property: propertyKey, operator: z.literal('exists'), value: z.boolean() }).strict(),
+  z.object({ property: propertyKey, operator: orderedOperator, type: z.literal('number'), value: z.number().finite() }).strict(),
+  z.object({ property: propertyKey, operator: orderedOperator, type: z.literal('date'),
+    value: z.union([z.iso.date(), z.iso.datetime({ offset: true })]) }).strict(),
+]);
+export type FrontmatterFilter = z.infer<typeof frontmatterFilterSchema>;
 export const searchVaultFilesRequestSchema = z.object({
   query: z.string().refine(
     (query) => query.trim().length > 0
       && new TextEncoder().encode(query).byteLength <= VAULT_LIMITS.maxSearchQueryBytes
       && query.trim().split(/\s+/u).length <= VAULT_LIMITS.maxSearchTerms,
-    { message: `Query must contain 1-${VAULT_LIMITS.maxSearchTerms} terms and not exceed ${VAULT_LIMITS.maxSearchQueryBytes} UTF-8 bytes.` },
-  ),
+    { message: 'Query must contain 1-16 terms and at most 256 UTF-8 bytes.' },
+  ).optional(),
+  filters: z.array(frontmatterFilterSchema).min(1).max(16).optional(),
+  properties: z.array(propertyKey).max(20).optional(),
   pathPrefix: z.string().max(VAULT_LIMITS.maxPathLength).optional(),
   limit: z.number().int().positive().max(VAULT_LIMITS.maxSearchLimit).optional(),
-}).strict();
+  cursor: z.string().max(VAULT_LIMITS.maxCursorLength).optional(),
+}).strict().refine((value) => value.query !== undefined || !!value.filters?.length,
+  { message: 'Supply query text or nonempty filters.' });
 export type SearchVaultFilesRequest = z.infer<typeof searchVaultFilesRequestSchema>;
 
 export const searchVaultFilesDataSchema = z.object({
@@ -111,25 +128,49 @@ export const searchVaultFilesDataSchema = z.object({
     path: z.string(),
     revision: z.string(),
     snippet: z.string(),
+    properties: z.record(z.string(), z.json()).optional(),
     unresolvedVersions: z.number().int().min(2).optional(),
   })),
+  cursor: z.string().optional(),
+  unqueryableFiles: z.number().int().nonnegative().optional(),
   truncated: z.boolean(),
   incomplete: z.boolean(),
   unindexedFiles: z.number().int().nonnegative(),
 });
-export type SearchVaultFilesData = z.infer<typeof searchVaultFilesDataSchema>;
+// Values are JSON-validated at runtime; this nonrecursive public type avoids
+// exceeding TypeScript instantiation depth in Cloudflare RPC stub generation.
+export type SearchVaultFilesData = {
+  results: Array<{ path: string; revision: string; snippet: string; unresolvedVersions?: number; properties?: Record<string, {} | null> }>;
+  truncated: boolean; incomplete: boolean; unindexedFiles: number; unqueryableFiles?: number; cursor?: string;
+};
 
-export const readVaultFileRequestSchema = z.object({
-  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-}).strict();
+export const filePathRequestSchema = z.object({ path: z.string().min(1).max(VAULT_LIMITS.maxPathLength) }).strict();
+export const readVaultFileRequestSchema = filePathRequestSchema.extend({
+  startLine: z.number().int().positive().optional(),
+  endLine: z.number().int().positive().optional(),
+  expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength).optional(),
+}).refine((value) => value.endLine === undefined || value.endLine >= (value.startLine ?? 1), { message: 'endLine must not precede startLine' });
 export type ReadVaultFileRequest = z.infer<typeof readVaultFileRequestSchema>;
 
 export const readVaultFileDataSchema = z.object({
   path: z.string(),
   revision: z.string(),
   content: z.string(),
+  startLine: z.number().int().positive().optional(),
+  endLine: z.number().int().nonnegative().optional(),
+  totalLines: z.number().int().nonnegative().optional(),
+  partial: z.boolean().optional(),
 });
 export type ReadVaultFileData = z.infer<typeof readVaultFileDataSchema>;
+
+export const getVaultFileOutlineRequestSchema = filePathRequestSchema;
+export type GetVaultFileOutlineRequest = z.infer<typeof getVaultFileOutlineRequestSchema>;
+export const getVaultFileOutlineDataSchema = z.object({
+  path: z.string(), revision: z.string(), totalLines: z.number().int().nonnegative(),
+  headings: z.array(z.object({ text: z.string(), level: z.number().int().min(1).max(6),
+    startLine: z.number().int().positive(), endLine: z.number().int().positive() })),
+});
+export type GetVaultFileOutlineData = z.infer<typeof getVaultFileOutlineDataSchema>;
 
 /** Markdown content bounded by its encoded wire/storage size, not UTF-16 code units. */
 export const vaultContentSchema = z.string()
@@ -167,8 +208,8 @@ export const patchVaultFileDataSchema = z.object({
 });
 export type PatchVaultFileData = z.infer<typeof patchVaultFileDataSchema>;
 
-export const readVaultFrontmatterRequestSchema = readVaultFileRequestSchema;
-export type ReadVaultFrontmatterRequest = ReadVaultFileRequest;
+export const readVaultFrontmatterRequestSchema = filePathRequestSchema;
+export type ReadVaultFrontmatterRequest = z.infer<typeof readVaultFrontmatterRequestSchema>;
 
 export const frontmatterSchema: z.ZodType<Record<string, unknown>> = z.record(
   z.string().min(1).max(256),
