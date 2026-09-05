@@ -45,10 +45,13 @@ describe('MCP to storage Durable Object integration', () => {
           results: [expect.objectContaining({ path, unresolvedVersions: 2 })],
         },
       });
-      const write = await client.callTool({ name: 'append_file', arguments: { path, expectedRevision: '2-b', content: 'NEVER' } });
-      expect(write.isError).toBe(true);
-      if (!writable) expect(await tree()).toEqual(before);
-      else expect(write).toMatchObject({ structuredContent: { error: { code: 'conflict_reconciled', path } } });
+      if (!writable) {
+        expect((await client.listTools()).tools.some((tool) => tool.name === 'append_file')).toBe(false);
+        await expect(client.callTool({ name: 'append_file', arguments: { path, expectedRevision: '2-b', content: 'NEVER' } })).rejects.toThrow('Tool append_file not found');
+        expect(await tree()).toEqual(before);
+      } else {
+        await expect(client.callTool({ name: 'append_file', arguments: { path, expectedRevision: '2-b', content: 'NEVER' } })).resolves.toMatchObject({ isError: true, structuredContent: { error: { code: 'conflict_reconciled', path } } });
+      }
     }
   });
   it('exercises the complete tool surface through real RPC serialization', async () => {
@@ -79,7 +82,7 @@ describe('MCP to storage Durable Object integration', () => {
 
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual([
-      'vault_status', 'list_files', 'search_files', 'read_file', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'read_files', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
       'create_file', 'edit_file', 'append_file', 'patch_file', 'patch_frontmatter', 'delete_file',
     ]);
     const patchFrontmatter = tools.tools.find((tool) => tool.name === 'patch_frontmatter');
@@ -114,12 +117,23 @@ describe('MCP to storage Durable Object integration', () => {
     await expect(client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md' } })).resolves.toMatchObject({
       structuredContent: { content: fixture.files['notes/unicode-雪.md'] },
     });
+    const batch = await client.callTool({ name: 'read_files', arguments: { files: [
+      { path: 'notes/unicode-雪.md' }, { path: 'missing.md' },
+      { path: 'notes/unicode-雪.md', startLine: 1, endLine: 1 },
+      { path: 'notes/unicode-雪.md', expectedRevision: '1-stale' },
+    ] } });
+    expect(batch).toMatchObject({ structuredContent: { files: [
+      { result: { ok: true, data: { content: fixture.files['notes/unicode-雪.md'] } } },
+      { result: { ok: false, error: { code: 'not_found' } } },
+      { result: { ok: true, data: { startLine: 1, endLine: 1, content: '# Unicode\n' } } },
+      { result: { ok: false, error: { code: 'revision_conflict' } } },
+    ] } });
     const readWithText = await client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md' } });
     const textBlock = readWithText.content.find((item) => item.type === 'text');
     expect(textBlock?.type === 'text' && JSON.parse(textBlock.text)).toEqual(readWithText.structuredContent);
     const outlineResult = await client.callTool({ name: 'get_file_outline', arguments: { path: 'notes/unicode-雪.md' } });
     expect(outlineResult).toMatchObject({ structuredContent: { path: 'notes/unicode-雪.md', revision: expect.any(String), headings: expect.any(Array) } });
-    await expect(client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md', startLine: 1, endLine: 1 } })).resolves.toMatchObject({ structuredContent: { startLine: 1, endLine: 1, totalLines: expect.any(Number) } });
+    await expect(client.callTool({ name: 'read_file', arguments: { path: 'notes/unicode-雪.md', startLine: 1, endLine: 1 } })).resolves.toMatchObject({ structuredContent: { startLine: 1, endLine: 1, content: '# Unicode\n', totalLines: expect.any(Number) } });
     await expect(client.callTool({ name: 'search_files', arguments: { filters: [{ property: 'title', operator: 'eq', value: 'MCP fixture' }], properties: ['title'] } })).resolves.toMatchObject({ structuredContent: { results: [expect.objectContaining({ path: 'notes/frontmatter.md', properties: { title: 'MCP fixture' } })] } });
     await expect(client.callTool({ name: 'read_frontmatter', arguments: { path: 'notes/frontmatter.md' } })).resolves.toMatchObject({
       structuredContent: { frontmatter: { title: 'MCP fixture' } },
@@ -191,7 +205,7 @@ describe('MCP to storage Durable Object integration', () => {
     closeables.push(client, server);
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
-      'vault_status', 'list_files', 'search_files', 'read_file', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'read_files', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
     ]);
   });
 });

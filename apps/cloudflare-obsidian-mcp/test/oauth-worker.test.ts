@@ -203,6 +203,16 @@ describe('OAuth Worker boundary', () => {
     });
 
     await seedVault();
+    const listed = await mcpCall(tokenPayload.access_token, 'tools/list', {});
+    expect(listed.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'read_files' })]));
+    expect((listed.tools as Array<{ name: string }>).map((tool) => tool.name)).not.toContain('create_file');
+    expect(await mcpCall(tokenPayload.access_token, 'tools/call', { name: 'read_files', arguments: {
+      files: [{ path: 'notes/unicode-雪.md' }, { path: 'missing.md' }],
+    } })).toMatchObject({ structuredContent: { files: [
+      { result: { ok: true, data: { content: fixture.files['notes/unicode-雪.md'] } } },
+      { result: { ok: false, error: { code: 'not_found' } } },
+    ] } });
+
     await expect(mcpCall(tokenPayload.access_token, 'tools/call', {
       name: 'vault_status', arguments: {},
     })).resolves.toMatchObject({ structuredContent: { compatible: true } });

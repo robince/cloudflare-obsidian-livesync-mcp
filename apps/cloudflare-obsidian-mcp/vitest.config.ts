@@ -6,6 +6,6 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['test/vault-tools.test.ts'],
+    include: ['test/vault-tools.test.ts', 'test/tool-logging.test.ts'],
   },
 });

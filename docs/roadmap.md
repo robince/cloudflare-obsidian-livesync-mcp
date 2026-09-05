@@ -61,6 +61,14 @@ or undocumented operator steps, and can independently enable MCP.
 
 ## 4. Expand MCP only where useful
 
+Immediate next step before more frequent personal use: review the current tool
+surface and server instructions using the [MCP sibling catalogue](mcp-catalog.md).
+It includes `../obsidian-web-mcp` and the now-focused `../obsidian-mcp`, compared
+against this project's updated contract 5. Tool-selection/subtree descriptions,
+bounded `read_files`, and permission-aware registration are now implemented locally. Next run the small personal-use
+exercise; retain existing CAS and conflict safeguards. This interface review can
+precede the broader operating envelope and public-deployment milestones above.
+
 Implemented locally: immutable-ID authorization, conservative cleanup, bounded
 replication, JSON MCP results, typed frontmatter filters, text/property search
 continuation, outlines and revision-checked line ranges. See the contract 5

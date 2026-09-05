@@ -2,7 +2,7 @@
 
 This Worker exposes authenticated tools for one configured vault:
 
-- read tools: `vault_status`, `list_files`, `search_files`, `read_file`, `get_file_outline`, `read_frontmatter`,
+- read tools: `vault_status`, `list_files`, `search_files`, `read_file`, `read_files`, `get_file_outline`, `read_frontmatter`,
   `list_attachments`, and `read_attachment`;
 - write tools: `create_file`, `edit_file`, `append_file`, `patch_file`,
   `patch_frontmatter`, and `delete_file`.
@@ -212,3 +212,78 @@ an incomplete move. This is not atomic and does not rewrite links or relocate
 attachments. After any revision conflict or reconciliation, reread and reassess
 instead of blindly replaying. LiveSync conflicts require the stated Obsidian
 resolution path.
+
+
+## Tool selection, subtrees, and batch reads
+
+A read-authorized connection sees nine read tools. The six write tools appear
+only when writes are enabled and that connection has both read and write access
+with an allowlisted identity. Handlers independently recheck authorization;
+hiding tools does not replace access control. Reconnect clients that cache tool
+lists after changing grants or deployment settings.
+
+For a known note, use `read_file` directly. Use `list_files` for path discovery,
+`search_files` for content/property conditions, and outline plus revision-bound
+line ranges for a section. Prefer `patch_file` for a small exact edit,
+`append_file` for additions, and `patch_frontmatter` for YAML changes.
+`edit_file` replaces the entire file and requires a complete read first.
+
+Folders are implicit in vault-relative file paths. `create_file` can create
+`Projects/New/Ideas.md` without a separate folder operation. Empty folders are
+not represented. `list_files` and `list_attachments` with
+`{"prefix":"Projects/New/"}` recursively return flat file entries under that
+subtree. `search_files` uses `pathPrefix` for the same subtree scope. Include
+the trailing `/` to avoid matching similarly named sibling paths.
+
+`read_files` accepts 1–10 ordinary read requests, optionally with line ranges
+and expected revisions:
+
+```json
+{
+  "files": [
+    {"path":"Projects/Alpha.md"},
+    {"path":"Projects/Beta.md","startLine":20,"endLine":40}
+  ]
+}
+```
+
+Results are ordered `files` entries with zero-based `index`, requested `path`,
+and `result`: either `{ok:true,data:...}`, `{ok:false,error:...}`, or
+`{omitted:true,reason:"response_budget"}`. Check every item: a successful batch
+response does not mean every file succeeded. Missing/conflicted files and RPC
+failures do not discard other results. Errors preserve the existing recovery
+codes. Reads are independent, not a multi-file snapshot.
+
+The serialized MCP tool result (text plus structured content, including JSON
+escaping) is capped at 1 MiB, excluding the outer JSON-RPC envelope. Items that
+do not fit are explicitly omitted, never silently shortened; later smaller
+items can still fit. Retry omissions with `read_file` or narrower ranges.
+Each whole note still has the existing 512,000-byte reconstruction limit.
+Batching reduces client round trips, not storage work. This additive MCP tool
+reuses contract 5 single-file RPC; no storage contract upgrade is required.
+
+## Tool execution diagnostics
+
+Each registered tool handler logs `mcp_tool_start` and `mcp_tool_end` with a
+shared generated `requestId` and tool name. Completion records include
+`durationMs`, `outcome` (`success`, `partial`, `error`, or `exception`), and
+allowlisted vault error codes. Batch reads also include item/failure counts;
+omitted reads count as incomplete. Logs exclude arguments, paths, note content,
+credentials, and error messages.
+
+These durations measure handler execution, not OAuth, schema validation, network
+transit, or ChatGPT reasoning/approval time. Requests blocked before reaching
+the handler produce no tool-start record; absence alone does not prove a safety
+block. Compare these records with the surrounding Worker request logs.
+
+`create_file` and `append_file` are additive writes (`destructiveHint: false`),
+not read-only or idempotent. Replacement, patching, and deletion remain marked
+destructive. These hints describe behavior; ChatGPT still controls approvals.
+
+## Note titles
+
+The filename without `.md` serves as the note title. Server instructions and
+`create_file` describe the writing convention: omit a duplicate H1 (`# Title`)
+in newly authored content unless explicitly requested, and use `##` for sections
+when needed. Copies and unrelated edits preserve existing headings. This is
+model guidance; the server does not strip headings from supplied content.
