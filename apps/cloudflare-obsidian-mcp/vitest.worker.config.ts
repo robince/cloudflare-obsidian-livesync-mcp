@@ -15,7 +15,6 @@ export default defineConfig({
       wrangler: { configPath: './wrangler.oauth-test.jsonc' },
       miniflare: {
         bindings: {
-          GITHUB_CLIENT_ID: 'github-client-test',
           GITHUB_CLIENT_SECRET: 'github-secret-test',
         },
         workers: [{

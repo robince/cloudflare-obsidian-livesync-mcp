@@ -29,6 +29,7 @@ if (process.argv[2] === '--origin') {
   mcp.durable_objects.bindings[0].script_name = state.storage;
   mcp.kv_namespaces = [{ binding: 'OAUTH_KV' }];
   mcp.vars.VAULT_DATABASE = state.database;
+  mcp.vars.GITHUB_CLIENT_ID = '';
   mcp.vars.GITHUB_ALLOWED_LOGINS = '';
   mcp.vars.MCP_WRITES_ENABLED = 'false';
   mcp.observability = { enabled: false };

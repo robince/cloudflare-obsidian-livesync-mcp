@@ -98,7 +98,7 @@ describe('read profile checks', () => {
       enableCompression: false,
       handleFilenameCaseSensitive: false,
       hashAlg: 'xxhash64',
-    }), undefined)).toMatchObject({ supported: true });
+    }))).toMatchObject({ supported: true });
   });
 
   it.each<[Record<string, unknown>, string]>([
@@ -106,7 +106,7 @@ describe('read profile checks', () => {
     [{ encrypt: false, usePathObfuscation: true, hashAlg: 'xxhash64' }, 'path_obfuscation_unsupported'],
     [{ encrypt: false, usePathObfuscation: false, hashAlg: 'mixed-purejs' }, 'hash_algorithm_unsupported'],
   ])('rejects unsupported content addressing', (preferred, reason) => {
-    expect(inspectVaultProfile(milestone(preferred), undefined)).toMatchObject({
+    expect(inspectVaultProfile(milestone(preferred))).toMatchObject({
       supported: false,
       reasons: expect.arrayContaining([reason]),
     });

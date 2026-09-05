@@ -18,10 +18,12 @@ with Wrangler instead:
    npm ci
    ```
 
-2. Create the local secrets file and replace its placeholder with a strong,
-   unique password. This file is ignored by Git.
+2. Copy the portable configuration and secret example. Edit only the deployment
+   copy for your account; replace the password placeholder with a strong, unique
+   password. Both local files are ignored by Git.
 
    ```sh
+   cp wrangler.jsonc wrangler.deploy.jsonc
    cp .dev.vars.example .dev.vars
    ```
 
@@ -30,7 +32,7 @@ with Wrangler instead:
 
    ```sh
    npx wrangler login
-   npx wrangler deploy --secrets-file .dev.vars
+   npm run deploy:storage -- --secrets-file .dev.vars
    ```
 
 Wrangler opens Cloudflare authentication in a browser. On success, it provisions
@@ -62,7 +64,7 @@ invited collaborator.
 To change the password after deployment, run:
 
 ```sh
-npx wrangler secret put COUCHDB_PASSWORD
+npx wrangler secret put COUCHDB_PASSWORD --config wrangler.deploy.jsonc
 ```
 
 ## Connect Obsidian LiveSync
@@ -74,39 +76,84 @@ Use these CouchDB settings after deployment:
 - username: `admin`, unless you changed `COUCHDB_USERNAME`;
 - password: the value you set for `COUCHDB_PASSWORD`.
 
-Future deployments can use `npx wrangler deploy`; the existing secret is
-preserved. You can optionally connect the Worker to this private GitHub
-repository under **Worker > Settings > Builds** in the Cloudflare dashboard for
-automatic deployments. The Cloudflare Workers and Pages GitHub app must be
-granted access to the repository.
+Future deployments use `npm run deploy:storage`; the existing secret is
+preserved without requiring a local secret file.
+
+## Configuration files
+
+Each Worker keeps a committed `wrangler.jsonc` for portable defaults and local
+tests. Copy it to an ignored `wrangler.deploy.jsonc` in the same directory for
+actual deployments. The deploy scripts explicitly select the ignored copies
+and fail if they are missing. Tests, type generation, and CI dry runs use the
+committed templates.
+
+Deployment files contain non-secret configuration: Worker names, public URLs,
+vault names, GitHub Client IDs, allowlists, write settings, and provisioned
+resource IDs. Keep passwords and client secrets in ignored `.dev.vars` files
+or the existing Cloudflare secret store.
+
+Back up deployment files separately: Git clones do not restore them. These are
+full configuration copies, so carry shared code-entry, binding, migration, and
+compatibility changes into the deployment copies when updating the templates.
+There is no custom configuration-merging step.
+
+For automated deployment, supply the deployment file to the build environment
+before running the deploy scripts. Do not commit account-specific values merely
+to make a Git-based build work.
 
 ## Deploy the MCP Worker
 
 The MCP Worker connects directly to the storage Worker's Durable Object. It
 does not need the CouchDB URL or password. Before its first deployment:
 
-1. Register a GitHub OAuth app. Set its homepage to the MCP Worker's expected
-   origin and its callback URL to that origin plus `/oauth/github/callback`.
-2. In `apps/cloudflare-obsidian-mcp/wrangler.jsonc`, set `VAULT_DATABASE` to the
-   database name used by Obsidian, `MCP_PUBLIC_BASE_URL` to the MCP Worker's
-   exact HTTPS origin, and `GITHUB_ALLOWED_LOGINS` to the GitHub accounts that
-   may connect. Leave `MCP_WRITES_ENABLED` as `false` for the initial test.
+1. Reuse the account subdomain from the existing storage Worker URL. The MCP
+   origin is `https://cloudflare-obsidian-mcp.<account-subdomain>.workers.dev`.
+   Register a GitHub OAuth app with this homepage and the same origin plus
+   `/oauth/github/callback` as its callback URL.
+2. Create the local deployment configuration:
+
+   ```sh
+   cp apps/cloudflare-obsidian-mcp/wrangler.jsonc apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc
+   ```
+
+   Set its non-secret `vars`: `GITHUB_CLIENT_ID`, `VAULT_DATABASE`,
+   `MCP_PUBLIC_BASE_URL`, `GITHUB_ALLOWED_LOGINS`, and `MCP_WRITES_ENABLED`.
+   Use `false` for an initial read-only test. If you rename the storage Worker,
+   update this file's `POUCH_DATABASES` binding `script_name` to match.
 3. Copy `apps/cloudflare-obsidian-mcp/.dev.vars.example` to
-   `apps/cloudflare-obsidian-mcp/.dev.vars` and fill in the OAuth client ID and
-   secret.
+   `apps/cloudflare-obsidian-mcp/.dev.vars` and fill in only `GITHUB_CLIENT_SECRET`.
+4. Deploy the Worker and secret together:
 
-Then deploy the MCP Worker:
+   ```sh
+   npm run deploy:mcp -- --secrets-file apps/cloudflare-obsidian-mcp/.dev.vars
+   ```
 
-```sh
-npm run deploy:mcp
-```
+For a brand-new account, configure its workers.dev subdomain when deploying
+storage first, then use that subdomain for MCP. An existing storage deployment
+already supplies the suffix, so MCP needs no preliminary deployment.
 
-Wrangler automatically provisions and binds the OAuth KV namespace during the
-first deployment. No separate KV command or resource ID is required.
+Wrangler provisions OAuth KV on first deployment and reuses the existing
+`OAUTH_KV` binding on subsequent deployments. Keep only `{ "binding": "OAUTH_KV" }`
+in the committed template. Retain the namespace ID Wrangler provisions in the
+ignored deployment file so subsequent deployments explicitly target that OAuth
+store. For an existing deployment, copy its current ID rather than creating a
+new namespace. The ID is non-secret but account-specific.
 
-For a fresh installation, after both secret files and the MCP variables are
-configured, deploy both Workers in dependency order with:
+Generate types with `npm run types`; generation and checks use
+`--strict-vars=false` to avoid literal URL, database, login, and client ID types.
 
-```sh
-npm run deploy
-```
+After the initial deployments, use `npm run deploy:mcp` for MCP alone or
+`npm run deploy` for both Workers in dependency order. Existing secrets are
+preserved, so these commands do not require local secret files. Non-secret vars
+come from the ignored deployment configurations; dashboard vars and `--keep-vars` are
+unnecessary.
+
+When migrating an existing deployment that stored `GITHUB_CLIENT_ID` as a
+secret, set its public value in the ignored deployment file's `vars` and remove
+`GITHUB_CLIENT_ID` from `secrets.required` in that file. Deploy them together.
+Until the ID is available, omit it from `vars` and retain its existing required
+secret binding; do not substitute a placeholder or delete the live secret first.
+
+References: [workers.dev URLs](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/),
+[configuration best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/),
+and [Wrangler type generation](https://developers.cloudflare.com/workers/wrangler/commands/workers/#types).

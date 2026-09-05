@@ -1,18 +1,29 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { getMcpAuthContext } from 'agents/mcp/server';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import {
   appendVaultFileRequestSchema,
-  CONTRACT_VERSION,
-  frontmatterSchema,
+  listVaultFilesRequestSchema,
+  readVaultFileRequestSchema,
+  createVaultFileRequestSchema,
+  updateVaultFileRequestSchema,
+  deleteVaultFileRequestSchema,
+  vaultStatusDataSchema,
+  listVaultFilesDataSchema,
+  readVaultFileDataSchema,
+  readVaultFrontmatterDataSchema,
+  listVaultAttachmentsDataSchema,
+  readVaultAttachmentDataSchema,
+  patchVaultFileDataSchema,
+  patchVaultFrontmatterDataSchema,
+  writeVaultFileDataSchema,
   patchVaultFileRequestSchema,
   patchVaultFrontmatterRequestSchema,
   readVaultAttachmentRequestSchema,
   searchVaultFilesDataSchema,
   searchVaultFilesRequestSchema,
   VAULT_LIMITS,
-  vaultContentSchema,
   type VaultResult,
 } from '@cloudflare-obsidian-livesync/contracts';
 
@@ -51,33 +62,17 @@ export const VAULT_TOOL_NAMES = [
   'delete_file',
 ] as const;
 
-export const listFilesInput = z.object({
-  prefix: z.string().max(VAULT_LIMITS.maxPathLength).optional(),
-  limit: z.number().int().positive().max(VAULT_LIMITS.maxListLimit).optional(),
-  cursor: z.string().max(VAULT_LIMITS.maxCursorLength).optional(),
-}).strict();
+export const listFilesInput = listVaultFilesRequestSchema;
 
-export const readFileInput = z.object({
-  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-}).strict();
+export const readFileInput = readVaultFileRequestSchema;
 
 export const searchFilesInput = searchVaultFilesRequestSchema;
 
-export const createFileInput = z.object({
-  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: vaultContentSchema,
-}).strict();
+export const createFileInput = createVaultFileRequestSchema;
 
-export const editFileInput = z.object({
-  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  content: vaultContentSchema,
-  expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
-}).strict();
+export const editFileInput = updateVaultFileRequestSchema;
 
-export const deleteFileInput = z.object({
-  path: z.string().min(1).max(VAULT_LIMITS.maxPathLength),
-  expectedRevision: z.string().min(1).max(VAULT_LIMITS.maxRevisionLength),
-}).strict();
+export const deleteFileInput = deleteVaultFileRequestSchema;
 
 export const appendFileInput = appendVaultFileRequestSchema;
 export const patchFileInput = patchVaultFileRequestSchema;
@@ -107,17 +102,12 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     },
   );
   const handlers = createVaultToolHandlers(rpc, auth);
-  const writeResult = z.object({ path: z.string(), revision: z.string() });
 
   server.registerTool(
     'vault_status',
     {
       description: 'Check whether the configured Obsidian LiveSync vault can be read.',
-      outputSchema: z.object({
-        contractVersion: z.literal(CONTRACT_VERSION),
-        compatible: z.boolean(),
-        reasons: z.array(z.string()),
-      }),
+      outputSchema: vaultStatusDataSchema,
     },
     handlers.vaultStatus,
   );
@@ -126,19 +116,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     {
       description: 'List Markdown files in the configured vault.',
       inputSchema: listFilesInput,
-      outputSchema: z.object({
-        files: z.array(z.object({
-          path: z.string(),
-          revision: z.string(),
-          sizeBytes: z.number().int().nonnegative().optional(),
-          createdAt: z.number().int().nonnegative().optional()
-            .describe('Unix epoch time in milliseconds.'),
-          modifiedAt: z.number().int().nonnegative().optional()
-            .describe('Unix epoch time in milliseconds.'),
-          unresolvedVersions: z.number().int().min(2).optional(),
-        })),
-        cursor: z.string().optional(),
-      }),
+      outputSchema: listVaultFilesDataSchema,
     },
     handlers.listFiles,
   );
@@ -156,7 +134,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     {
       description: 'Read one Markdown file from the configured vault. JSON views may display actual line breaks as escaped \\n sequences; the returned string contains real line breaks.',
       inputSchema: readFileInput,
-      outputSchema: z.object({ path: z.string(), revision: z.string(), content: z.string() }),
+      outputSchema: readVaultFileDataSchema,
     },
     handlers.readFile,
   );
@@ -165,7 +143,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     {
       description: 'Read a JSON-compatible view of YAML frontmatter without returning the note body. YAML timestamps, binary values, and non-finite numbers are returned as strings.',
       inputSchema: readFrontmatterInput,
-      outputSchema: z.object({ path: z.string(), revision: z.string(), frontmatter: frontmatterSchema }),
+      outputSchema: readVaultFrontmatterDataSchema,
     },
     handlers.readFrontmatter,
   );
@@ -174,20 +152,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     {
       description: 'List non-Markdown files in the configured vault without returning their content.',
       inputSchema: listAttachmentsInput,
-      outputSchema: z.object({
-        attachments: z.array(z.object({
-          path: z.string(),
-          revision: z.string(),
-          mimeType: z.string(),
-          sizeBytes: z.number().int().nonnegative().optional(),
-          createdAt: z.number().int().nonnegative().optional()
-            .describe('Unix epoch time in milliseconds.'),
-          modifiedAt: z.number().int().nonnegative().optional()
-            .describe('Unix epoch time in milliseconds.'),
-          unresolvedVersions: z.number().int().min(2).optional(),
-        })),
-        cursor: z.string().optional(),
-      }),
+      outputSchema: listVaultAttachmentsDataSchema,
     },
     handlers.listAttachments,
   );
@@ -196,13 +161,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
     {
       description: `Read one non-Markdown file as base64, up to ${VAULT_LIMITS.maxAttachmentReadBytes} decoded bytes.`,
       inputSchema: readAttachmentInput,
-      outputSchema: z.object({
-        path: z.string(),
-        revision: z.string(),
-        mimeType: z.string(),
-        sizeBytes: z.number().int().nonnegative(),
-        contentBase64: z.string(),
-      }),
+      outputSchema: readVaultAttachmentDataSchema,
     },
     handlers.readAttachment,
   );
@@ -212,7 +171,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
       {
         description: `Create a new Markdown file in the configured vault.${EXACT_TEXT_NOTE} On revision_conflict or conflict_reconciled, reread and reassess. On livesync_conflict, tell the user to resolve in Obsidian and sync first.`,
         inputSchema: createFileInput,
-        outputSchema: writeResult,
+        outputSchema: writeVaultFileDataSchema,
       },
       handlers.createFile,
     );
@@ -221,7 +180,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
       {
         description: `Replace the contents of an existing Markdown file.${EXACT_TEXT_NOTE} Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.`,
         inputSchema: editFileInput,
-        outputSchema: writeResult,
+        outputSchema: writeVaultFileDataSchema,
       },
       handlers.editFile,
     );
@@ -230,7 +189,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
       {
         description: `Append text exactly to an existing Markdown file.${EXACT_TEXT_NOTE} Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.`,
         inputSchema: appendFileInput,
-        outputSchema: writeResult,
+        outputSchema: writeVaultFileDataSchema,
       },
       handlers.appendFile,
     );
@@ -239,7 +198,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
       {
         description: `Replace exact text in an existing Markdown file.${EXACT_TEXT_NOTE} The match must be unique unless replaceAll is true. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.`,
         inputSchema: patchFileInput,
-        outputSchema: writeResult.extend({ replacements: z.number().int().positive() }),
+        outputSchema: patchVaultFileDataSchema,
       },
       handlers.patchFile,
     );
@@ -248,7 +207,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
       {
         description: 'Update or remove top-level YAML frontmatter keys without replacing the note body. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: patchFrontmatterInput,
-        outputSchema: writeResult.extend({ updated: z.array(z.string()), removed: z.array(z.string()) }),
+        outputSchema: patchVaultFrontmatterDataSchema,
       },
       handlers.patchFrontmatter,
     );
@@ -257,7 +216,7 @@ export function createVaultMcpServer(rpc: VaultRpc, auth: VaultToolAuth = {}): M
       {
         description: 'Delete a Markdown file. Requires the current revision. After revision_conflict or conflict_reconciled, reread and reassess before retrying; never blindly replay. For livesync_conflict, tell the user to resolve in Obsidian and sync first.',
         inputSchema: deleteFileInput,
-        outputSchema: writeResult,
+        outputSchema: writeVaultFileDataSchema,
       },
       handlers.deleteFile,
     );

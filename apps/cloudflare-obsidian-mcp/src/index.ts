@@ -26,15 +26,10 @@ type GithubAuthorizationState = {
   session: string;
 };
 
-type GithubSecrets = {
-  GITHUB_CLIENT_ID?: string;
-  GITHUB_CLIENT_SECRET?: string;
-};
-
 class ConfigurationError extends Error {}
 
 function writesEnabled(env: Env): boolean {
-  return (env.MCP_WRITES_ENABLED as string) === 'true';
+  return env.MCP_WRITES_ENABLED === 'true';
 }
 
 class McpApi extends WorkerEntrypoint<Env, McpAuthProps> {
@@ -156,7 +151,7 @@ async function continueToGithub(request: Request, env: OAuthEnv): Promise<Respon
   await env.OAUTH_KV.delete(authorizationKey(id));
 
   const github = new URL('https://github.com/login/oauth/authorize');
-  github.searchParams.set('client_id', requiredSecret(githubSecrets(env).GITHUB_CLIENT_ID, 'GITHUB_CLIENT_ID'));
+  github.searchParams.set('client_id', requiredValue(env.GITHUB_CLIENT_ID, 'GITHUB_CLIENT_ID'));
   github.searchParams.set('redirect_uri', new URL('/oauth/github/callback', publicOrigin(env)).toString());
   github.searchParams.set('state', githubState);
   github.searchParams.set('scope', 'read:user');
@@ -210,8 +205,8 @@ async function completeGithubAuthorization(request: Request, env: OAuthEnv): Pro
 
 async function exchangeGithubCode(code: string, env: Env): Promise<string> {
   const body = new URLSearchParams({
-    client_id: requiredSecret(githubSecrets(env).GITHUB_CLIENT_ID, 'GITHUB_CLIENT_ID'),
-    client_secret: requiredSecret(githubSecrets(env).GITHUB_CLIENT_SECRET, 'GITHUB_CLIENT_SECRET'),
+    client_id: requiredValue(env.GITHUB_CLIENT_ID, 'GITHUB_CLIENT_ID'),
+    client_secret: requiredValue(env.GITHUB_CLIENT_SECRET, 'GITHUB_CLIENT_SECRET'),
     code,
     redirect_uri: new URL('/oauth/github/callback', publicOrigin(env)).toString(),
   });
@@ -327,14 +322,9 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
-function requiredSecret(value: string | undefined, name: string): string {
+function requiredValue(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${name} is not configured`);
   return value;
-}
-
-function githubSecrets(env: Env): GithubSecrets {
-  // Wrangler intentionally does not emit secret bindings in generated types.
-  return env as unknown as GithubSecrets;
 }
 
 function consentPage(authorizationId: string, csrf: string, clientName: string, scopes: string[]): string {

@@ -33,7 +33,6 @@ import { createInProcessCouchFetch } from './livesync-vault/in-process-couch-fet
 import {
   inspectVaultProfile,
   MILESTONE_DOCUMENT_ID,
-  SYNC_PARAMETERS_DOCUMENT_ID,
   type VaultProfileInspection,
 } from './livesync-vault/profile';
 import type { DatabaseInfo, JsonObject } from './types';
@@ -217,7 +216,6 @@ export class PouchDatabase extends DurableObject<Env> {
         return this.inspectCommonlibProfile();
       },
       acquireCommonlib: (profile) => this.createCommonlib(profile),
-      releaseCommonlib: (commonlib) => commonlib.close(),
     });
   }
 
@@ -233,7 +231,6 @@ export class PouchDatabase extends DurableObject<Env> {
         return this.inspectCommonlibProfile();
       },
       acquireCommonlib: (profile) => this.createCommonlib(profile),
-      releaseCommonlib: (commonlib) => commonlib.close(),
     });
   }
 
@@ -271,11 +268,7 @@ export class PouchDatabase extends DurableObject<Env> {
         throw error;
       }
     };
-    const [milestone, syncParameters] = await Promise.all([
-      getOptional(MILESTONE_DOCUMENT_ID),
-      getOptional(SYNC_PARAMETERS_DOCUMENT_ID),
-    ]);
-    return inspectVaultProfile(milestone, syncParameters);
+    return inspectVaultProfile(await getOptional(MILESTONE_DOCUMENT_ID));
   }
 
   private inProcessCouchFetch(): typeof globalThis.fetch {

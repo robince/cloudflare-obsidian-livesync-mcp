@@ -7,8 +7,8 @@
     "check": "tsc --noEmit",
     "test": "npm run test:build-storage && vitest run --config vitest.config.ts && vitest run --config vitest.worker.config.ts",
     "test:build-storage": "wrangler deploy --dry-run --config ../../wrangler.jsonc --outdir dist/test-storage",
-    "types": "wrangler types",
-    "types:check": "wrangler types --check",
+    "types": "wrangler types --strict-vars=false",
+    "types:check": "wrangler types --strict-vars=false --check",
     "dry-run": "wrangler deploy --dry-run --outdir ../../dist/mcp"
   },
   "dependencies": {

@@ -3,7 +3,6 @@ import {
   CONTRACT_VERSION,
   createVaultFileRequestSchema,
   deleteVaultFileRequestSchema,
-  listVaultAttachmentsRequestSchema,
   listVaultFilesRequestSchema,
   patchVaultFileRequestSchema,
   patchVaultFrontmatterRequestSchema,
@@ -47,7 +46,6 @@ type VaultDependencies = {
   acquireCommonlib: (
     profile: Extract<VaultProfileInspection, { supported: true }>,
   ) => Promise<CommonlibFacade>;
-  releaseCommonlib: (commonlib: CommonlibFacade) => Promise<void>;
 };
 
 type Cursor = { v: 1; prefix: string; id: string };
@@ -70,61 +68,40 @@ export class LiveSyncVault {
   }
 
   async list(request: ListVaultFilesRequest): Promise<VaultResult<ListVaultFilesData>> {
-    const parsed = listVaultFilesRequestSchema.safeParse(request);
-    if (!parsed.success) return failure('invalid_input', 'Invalid file listing request.');
-
-    const prefix = parsed.data.prefix ?? '';
-    if (!isSafePrefix(prefix)) return failure('invalid_input', 'Prefix must be a safe relative path.');
-
-    const cursor = decodeCursor(parsed.data.cursor, prefix);
-    if (parsed.data.cursor && !cursor) return failure('invalid_input', 'Cursor does not match this prefix.');
-    const limit = parsed.data.limit ?? VAULT_LIMITS.defaultListLimit;
-
-    return this.withCommonlib(async (commonlib, profile) => {
-      const page: CommonlibFileMetadata[] = [];
-      let extra = false;
-      let examined = 0;
-      let lastId: string | undefined;
-      for await (const file of commonlib.enumerate()) {
-        if (!isListedMarkdown(file, prefix, profile.handleFilenameCaseSensitive)) continue;
-        if (cursor && file.id <= cursor.id) continue;
-        if (page.length === limit || examined === VAULT_LIMITS.maxListLimit) {
-          extra = true;
-          break;
-        }
-        const versions = await commonlib.conflictVersions(file.path);
-        examined++;
-        lastId = file.id;
-        if ((file.deleted || file.datatype !== 'plain') && versions < 2) continue;
-        page.push({ ...file, ...(versions > 1 ? { unresolvedVersions: versions } : {}) });
-      }
-      const next = extra && lastId
-        ? encodeCursor({ v: 1, prefix, id: lastId })
-        : undefined;
-      return success({
-        files: page.map(toPublicFile),
-        ...(next ? { cursor: next } : {}),
-      });
-    });
+    const result = await this.listPage(request, 'file');
+    if (!result.ok) return result;
+    return success({ ...result.data, files: result.data.files.map(toPublicFile) });
   }
 
   async listAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>> {
-    const parsed = listVaultAttachmentsRequestSchema.safeParse(request);
-    if (!parsed.success) return failure('invalid_input', 'Invalid attachment listing request.');
+    const result = await this.listPage(request, 'attachment');
+    if (!result.ok) return result;
+    const { files, ...page } = result.data;
+    return success({ ...page, attachments: files.map((file) => ({ ...toPublicFile(file), mimeType: mimeType(file.path) })) });
+  }
+
+  private async listPage(
+    request: ListVaultFilesRequest,
+    kind: 'file' | 'attachment',
+  ): Promise<VaultResult<{ files: CommonlibFileMetadata[]; cursor?: string }>> {
+    const parsed = listVaultFilesRequestSchema.safeParse(request);
+    if (!parsed.success) return failure('invalid_input', `Invalid ${kind} listing request.`);
 
     const prefix = parsed.data.prefix ?? '';
     if (!isSafePrefix(prefix)) return failure('invalid_input', 'Prefix must be a safe relative path.');
+
     const cursor = decodeCursor(parsed.data.cursor, prefix);
     if (parsed.data.cursor && !cursor) return failure('invalid_input', 'Cursor does not match this prefix.');
     const limit = parsed.data.limit ?? VAULT_LIMITS.defaultListLimit;
 
+    const isListed = kind === 'file' ? isListedMarkdown : isListedAttachment;
     return this.withCommonlib(async (commonlib, profile) => {
       const page: CommonlibFileMetadata[] = [];
       let extra = false;
       let examined = 0;
       let lastId: string | undefined;
       for await (const file of commonlib.enumerate()) {
-        if (!isListedAttachment(file, prefix, profile.handleFilenameCaseSensitive)) continue;
+        if (!isListed(file, prefix, profile.handleFilenameCaseSensitive)) continue;
         if (cursor && file.id <= cursor.id) continue;
         if (page.length === limit || examined === VAULT_LIMITS.maxListLimit) {
           extra = true;
@@ -133,14 +110,14 @@ export class LiveSyncVault {
         const versions = await commonlib.conflictVersions(file.path);
         examined++;
         lastId = file.id;
-        if (file.deleted && versions < 2) continue;
+        if ((file.deleted || (kind === 'file' && file.datatype !== 'plain')) && versions < 2) continue;
         page.push({ ...file, ...(versions > 1 ? { unresolvedVersions: versions } : {}) });
       }
       const next = extra && lastId
         ? encodeCursor({ v: 1, prefix, id: lastId })
         : undefined;
       return success({
-        attachments: page.map((file) => ({ ...toPublicFile(file), mimeType: mimeType(file.path) })),
+        files: page,
         ...(next ? { cursor: next } : {}),
       });
     });
@@ -373,7 +350,7 @@ export class LiveSyncVault {
       try {
         return await operation(commonlib, profile);
       } finally {
-        await this.dependencies.releaseCommonlib(commonlib);
+        await commonlib.close();
       }
     } catch (error) {
       const structured = vaultErrorSchema.safeParse(error);

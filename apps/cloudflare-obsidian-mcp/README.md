@@ -52,20 +52,20 @@ Worker. This does not change the CouchDB replication protocol.
 
 ## Deployment configuration
 
-Set these non-secret Worker variables before deployment:
+Copy `wrangler.jsonc` to the ignored `wrangler.deploy.jsonc` beside it. Keep
+portable defaults in the committed file and put these non-secret settings in
+the deployment copy's `vars`:
 
+- `GITHUB_CLIENT_ID` — the public GitHub OAuth app client ID.
 - `VAULT_DATABASE` — the existing LiveSync database name.
 - `MCP_PUBLIC_BASE_URL` — the exact public HTTPS origin, such as
   `https://vault-mcp.example.com`; no path is allowed.
 - `GITHUB_ALLOWED_LOGINS` — a comma- or whitespace-separated GitHub login
   allowlist. An empty value allows nobody.
 - `MCP_WRITES_ENABLED` — exact string `true` enables write tools. Every other
-  value disables them; the committed default is `false`.
+  value disables them; the committed template defaults to `false`.
 
-Set these Worker secrets through Wrangler or the Cloudflare dashboard:
-
-- `GITHUB_CLIENT_ID`
-- `GITHUB_CLIENT_SECRET`
+`GITHUB_CLIENT_SECRET` is the only MCP secret. Keep it out of `vars` and Git.
 
 Register GitHub's callback URL as
 `https://your-mcp-origin.example/oauth/github/callback`. The OAuth provider
@@ -84,9 +84,34 @@ Wrangler automatically creates and binds the `OAUTH_KV` namespace on the first
 deployment. The Worker also needs the cross-script `POUCH_DATABASES` Durable
 Object binding targeting the unchanged `cloudflare-pouchdb` Worker.
 
-Copy `.dev.vars.example` to `.dev.vars`, fill in the GitHub OAuth credentials,
-then deploy from the repository root with `npm run deploy:mcp`. To deploy both
-the storage and MCP Workers, use `npm run deploy`.
+For a workers.dev deployment, reuse the account subdomain from the existing
+storage URL: `https://cloudflare-obsidian-mcp.<account-subdomain>.workers.dev`.
+Set the URL and register the GitHub OAuth app before deploying MCP.
+
+Copy `.dev.vars.example` to `.dev.vars` in this directory and fill in only the
+GitHub client secret. From the repository root, deploy it with:
+
+```sh
+npm run deploy:mcp -- --secrets-file apps/cloudflare-obsidian-mcp/.dev.vars
+```
+
+Subsequent deployments use `npm run deploy:mcp`; the existing secret is
+preserved without requiring a local secrets file. `npm run deploy` redeploys
+both configured Workers in dependency order.
+
+Keep only `{ "binding": "OAUTH_KV" }` in the committed template. Retain the
+provisioned namespace ID in the ignored deployment copy; for an existing Worker,
+use its current ID. It is account-specific, not a secret.
+
+The deploy scripts select `wrangler.deploy.jsonc` explicitly. Back up this file
+separately and carry shared binding or compatibility changes into it when the
+template changes. Tests and CI dry runs use the committed template. See
+[DEPLOY.md](../../DEPLOY.md) for first deployment and migration from a client ID
+previously stored as a secret.
+
+Run `npm run types --workspace @cloudflare-obsidian-livesync/mcp` after config
+changes. Both generation and CI checks use `--strict-vars=false`, so generated
+bindings remain `string` instead of embedding deployment values.
 
 ## Verify
 

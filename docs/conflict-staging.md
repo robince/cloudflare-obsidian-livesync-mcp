@@ -13,25 +13,27 @@ It does not deploy anything. Repeating it refuses to replace an active run.
 Deploy with the generated configurations, never the default production names:
 
 ```sh
-npx wrangler deploy --config .wrangler/conflict-staging/storage.json
-npx wrangler secret bulk .wrangler/conflict-staging/storage-secrets.json --config .wrangler/conflict-staging/storage.json
+npx wrangler deploy --config .wrangler/conflict-staging/storage.json --secrets-file .wrangler/conflict-staging/storage-secrets.json
 ```
 
 Set the generated MCP origin with `node scripts/staging/prepare.mjs --origin
 <actual-staging-https-origin> <workers-dev-account-subdomain>`, using the
 generated MCP Worker name and the account's verified workers.dev subdomain.
-Deploy MCP with
-`npx wrangler deploy --config .wrangler/conflict-staging/mcp.json`. Its binding
-targets only the generated storage Worker. Wrangler provisions a dedicated
-OAuth KV namespace; retain its generated ID in the ignored configuration.
-Writes start disabled and the allowlist starts empty. Observability is disabled
-on these disposable copies to avoid retaining fixture content in remote logs.
-
 Create a separate GitHub OAuth application with this origin as its homepage
-and `<origin>/oauth/github/callback` as its callback. Save `GITHUB_CLIENT_ID`
-and `GITHUB_CLIENT_SECRET` in the ignored `mcp-secrets.json`, then use
-`wrangler secret bulk` with the generated MCP configuration. Do not print secrets
-or paste them into chat. Set only the staging account in `GITHUB_ALLOWED_LOGINS`.
+and `<origin>/oauth/github/callback` as its callback. Set `GITHUB_CLIENT_ID` in
+the generated MCP config's `vars`, and only the staging account in
+`GITHUB_ALLOWED_LOGINS`. Save only `GITHUB_CLIENT_SECRET` in the ignored
+`.wrangler/conflict-staging/mcp-secrets.json`. Deploy MCP and its secret together:
+
+```sh
+npx wrangler deploy --config .wrangler/conflict-staging/mcp.json --secrets-file .wrangler/conflict-staging/mcp-secrets.json
+```
+
+Its binding targets only the generated storage Worker. Wrangler provisions a
+dedicated OAuth KV namespace; retain its generated ID in the ignored config.
+Writes start disabled. Observability is disabled on these disposable copies to
+avoid retaining fixture content in remote logs. Do not print secrets or paste
+them into chat.
 
 Use `node scripts/staging/authorize.mjs read` for the real DCR/PKCE/GitHub
 consent flow. It provides a consent URL and listens on a temporary localhost
