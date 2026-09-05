@@ -16,7 +16,10 @@ export async function backupRoute(request: Request, env: Env): Promise<Response>
       if (Number(request.headers.get('content-length')) > 4096) fail('Restore request too large');
       const body = new TextDecoder().decode(await boundedBytes(request.body, 4096));
       if (body.length > 4096) fail('Restore request too large');
-      const { target, id, restart } = JSON.parse(body);
+      let parsed: unknown;
+      try { parsed = JSON.parse(body); } catch { fail('Invalid restore JSON'); }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) fail('Restore request must be an object');
+      const { target, id, restart } = parsed as Record<string, unknown>;
       if (typeof target !== 'string' || !DATABASE_NAME.test(target) || typeof id !== 'string' || (restart !== undefined && typeof restart !== 'boolean')) fail('Invalid restore request');
       return json(await env.POUCH_DATABASES.getByName(target).restoreBackup(target, database, id, restart === true));
     }

@@ -63,7 +63,7 @@ export async function extract(directory, output) {
     await mkdir(join(output, 'vault'), { mode: 0o700 });
     const paths = new Set();
     const winner = db.prepare('SELECT b.json,b.deleted,b.rev FROM "document-store" d JOIN "by-sequence" b ON d.winningseq=b.seq WHERE d.id=?');
-    for (const row of db.prepare('SELECT d.id,d.json AS metadata,b.json,b.deleted,b.rev FROM "document-store" d JOIN "by-sequence" b ON d.winningseq=b.seq').iterate()) {
+    for (const row of db.prepare('SELECT d.id,d.json AS metadata,b.json,b.deleted,b.rev FROM "document-store" d JOIN "by-sequence" b ON d.winningseq=b.seq ORDER BY d.winningseq').iterate()) {
       const entry = JSON.parse(row.json);
       if (typeof entry.path !== 'string' || row.deleted || entry.deleted || entry._deleted) continue;
       const path = entry.path;

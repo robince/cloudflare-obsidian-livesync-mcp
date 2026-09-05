@@ -65,26 +65,34 @@ describe('database backups', () => {
   });
 
   it('restarts a target interrupted after some tables have been imported', async () => {
-    const source = await seed(), m = await source.createBackup('vault');
+    const source = await seed();
+    for (let i = 0; i < 12; i++) await source.putDocument('vault', { _id: `partial-${i}`, data: 'x'.repeat(400_000) });
+    const m = await source.createBackup('vault');
     if (!('id' in m)) throw new Error('Expected backup');
+    expect(m.parts.length).toBeGreaterThan(1);
     const restored = await target();
     const interrupted = await runInDurableObject(restored, async (db: PouchDatabase) => {
       const bucket = db['env'].BACKUP_BUCKET;
       let reads = 0;
       db['env'].BACKUP_BUCKET = new Proxy(bucket, { get(object, key) {
         if (key === 'get') return async (...args: Parameters<R2Bucket['get']>) => {
-          if (String(args[0]).endsWith('.jsonl.gz') && ++reads > m.parts.length) throw new Error('Interrupted import');
+          if (String(args[0]).endsWith('.jsonl.gz') && ++reads === m.parts.length + 2) throw new Error('Interrupted import');
           return object.get(...args);
         };
         const value = Reflect.get(object, key); return typeof value === 'function' ? value.bind(object) : value;
       } });
       try { await db.restoreBackup('interrupted', 'vault', m.id); return false; }
-      catch { return db['meta']('restore_state') === 'failed'; }
+      catch {
+        const rows = db['ctx'].storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM "by-sequence"').one().n;
+        return db['meta']('restore_state') === 'failed' && rows > 0 && rows < m.tables['by-sequence'];
+      }
       finally { db['env'].BACKUP_BUCKET = bucket; }
     });
     expect(interrupted).toBe(true);
+    expect((await restored.fetch(new Request('https://local/', { headers: { 'x-pouchdb-database': 'interrupted' } }))).status).toBe(503);
     await expect(restored.restoreBackup('interrupted', 'vault', m.id, true)).resolves.toMatchObject({ ok: true });
     expect((await restored.readVaultFile({ path: 'notes/frontmatter.md' })).ok).toBe(true);
+    expect(await restored.getDocument('interrupted', 'partial-11')).toMatchObject({ data: 'x'.repeat(400_000) });
   });
 
   it('gates HTTP and RPC writers during export and releases on upload failure', async () => {
@@ -173,6 +181,16 @@ describe('database backups', () => {
     expect(await restored.getDocument('multipart', 'conflict', { rev: '1-aaaa' })).toMatchObject({ value: 'left' });
     const listing = await listBackups(env.BACKUP_BUCKET, 'vault');
     expect(listing.some(item => item.id === m.id)).toBe(true);
+  });
+
+  it('rejects malformed and non-object restore JSON as client errors', async () => {
+    for (const body of ['{', 'null', '[]', '"text"', '42', 'true', '{}']) {
+      const response = await worker.fetch(new Request('https://local/_backup/restore', {
+        method: 'POST', headers: { authorization: `Basic ${btoa('admin:test-password')}`, 'content-type': 'application/json' }, body,
+      }), env);
+      expect(response.status, body).toBe(400);
+      expect(await response.json()).toMatchObject({ error: 'backup_error' });
+    }
   });
 
   it('requires authentication on every operator route', async () => {

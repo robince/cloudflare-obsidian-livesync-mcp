@@ -25,16 +25,20 @@ for (const original of Object.values(fixture.localDocuments)) {
   await call(`/${name}/${doc._id}`, 'PUT', doc);
 }
 const measurements = [];
+let created;
 for (const count of [0, 10, 100]) {
   // Incompressible synthetic chunks exercise R2 size and multiple parts without private content.
   for (let i = count === 100 ? 10 : 0; i < count; i++) await call(`/${name}/h:benchmark-${i}`, 'PUT', { type: 'leaf', data: randomBytes(75000).toString('base64') });
   const before = await call(`/${name}`), started = Date.now();
   const m = await call(`/_backup?database=${name}`, 'POST');
+  created = m;
   measurements.push({ chunks: count, databaseBytes: before.sizes.file, backupBytes: m.bytes, pauseMs: m.pauseMs, wallMs: Date.now() - started, parts: m.parts.length });
 }
 process.env.COUCHDB_PASSWORD = secrets.COUCHDB_PASSWORD;
 const list = await call(`/_backup?database=${name}`);
-const id = list[0].id;
+assert(list.some(entry => entry.id === created.id), 'Created backup is missing from the listing');
+assert(created.parts.length > 1, 'Final backup must exercise multiple parts');
+const id = created.id;
 const output = await mkdtemp(join(tmpdir(), 'livesync-backup-smoke-'));
 const args = ['--url', url.origin, '--database', name, '--id', id];
 await backup(['download', ...args, '--out', join(output, 'archive')]);

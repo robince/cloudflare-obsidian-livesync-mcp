@@ -30,7 +30,9 @@ async function archive(directory, broken = false) {
   };
   const text = '# Unicode 雪\n' + 'compress me '.repeat(1000);
   doc('h:text', await compressDoc({ type: 'leaf', data: text }));
-  doc('notes/雪.md', { path: 'notes/雪.md', type: 'plain', children: ['h:text'], eden: {} });
+  const tail = '\nSecond chunk 雪\n';
+  doc('h:tail', { type: 'leaf', data: tail });
+  doc('notes/雪.md', { path: 'notes/雪.md', type: 'plain', children: ['h:text', 'h:tail'], eden: {} });
   doc('inline.md', { path: 'inline.md', type: 'plain', children: ['h:inline'], eden: { 'h:inline': { data: 'inline\n' } } });
   // LiveSync's current binary encoder is reused to produce the attachment fixture.
   const { encodeBinary } = await import('@vrtmrz/livesync-commonlib/compat/string_and_binary/convert');
@@ -49,14 +51,15 @@ async function archive(directory, broken = false) {
   }
   rows.push({ table: 'local-store', values: ['_local/obsydian_livesync_milestone', '0-1', JSON.stringify({ tweak_values: { PREFERRED: { encrypt: false, usePathObfuscation: false } } })] });
   const manifest = m('2026-09-05');
-  const lines = rows.map(row => JSON.stringify(row) + '\n');
+  // Reversed archive insertion order must not change which colliding path is extracted.
+  const lines = [...rows].reverse().map(row => JSON.stringify(row) + '\n');
   const bytes = pack(lines);
   rows.forEach(row => manifest.tables[row.table]++);
   manifest.parts.push({ file: '000000.jsonl.gz', bytes: bytes.length, rawBytes: Buffer.byteLength(lines.join('')), rows: rows.length, sha256: hash(bytes) });
   manifest.bytes = bytes.length;
   await writeFile(join(directory, 'manifest.json'), JSON.stringify(manifest));
   await writeFile(join(directory, '000000.jsonl.gz'), bytes);
-  return { text, binary, manifest, bytes };
+  return { text: text + tail, binary, manifest, bytes };
 }
 test('offline verification/extraction reconstructs compressed, inline and binary content', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'backup-test-'));
