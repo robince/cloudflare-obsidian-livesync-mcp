@@ -13,6 +13,8 @@ import {
   listFilesInput,
   patchFrontmatterInput,
   readFileInput,
+  readFilesInput,
+  MAX_BATCH_RESPONSE_BYTES,
   searchFilesInput,
   WRITE_SCOPE,
   VAULT_TOOL_NAMES,
@@ -78,6 +80,7 @@ describe('MCP vault surface', () => {
       'list_files',
       'search_files',
       'read_file',
+      'read_files',
       'get_file_outline',
       'read_frontmatter',
       'list_attachments',
@@ -89,13 +92,70 @@ describe('MCP vault surface', () => {
       'patch_frontmatter',
       'delete_file',
     ]);
-    const disabled = createVaultMcpServer(fakeRpc, { writesEnabled: false });
-    const enabled = createVaultMcpServer(fakeRpc, { writesEnabled: true });
+    const disabled = createVaultMcpServer(fakeRpc, { writesEnabled: false, canRead: () => true });
+    const enabled = createVaultMcpServer(fakeRpc, { writesEnabled: true, canRead: () => true, canWrite: () => true });
     const registered = (server: unknown) => Object.keys((server as { _registeredTools: object })._registeredTools);
     expect(registered(disabled)).toEqual([
-      'vault_status', 'list_files', 'search_files', 'read_file', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
+      'vault_status', 'list_files', 'search_files', 'read_file', 'read_files', 'get_file_outline', 'read_frontmatter', 'list_attachments', 'read_attachment',
     ]);
     expect(registered(enabled)).toEqual(VAULT_TOOL_NAMES);
+  });
+
+
+  it('advertises only effective permissions and rechecks handlers after revocation', async () => {
+    let permitted = true;
+    const registered = (server: unknown) => Object.keys((server as { _registeredTools: object })._registeredTools);
+    const readOnly = createVaultMcpServer(fakeRpc, { writesEnabled: true, canRead: () => true, canWrite: () => false });
+    expect(registered(readOnly)).toContain('read_files');
+    expect(registered(readOnly)).not.toContain('create_file');
+    expect(registered(createVaultMcpServer(fakeRpc, { writesEnabled: true, canRead: () => false, canWrite: () => true }))).toEqual([]);
+    const read = vi.fn(fakeRpc.readVaultFile);
+    const handlers = createVaultToolHandlers({ ...fakeRpc, readVaultFile: read }, { canRead: () => permitted });
+    permitted = false;
+    expect(await handlers.readFiles({ files: [{ path: 'a.md' }] })).toMatchObject({ isError: true });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('bounds batch input and preserves per-item failures, ranges and revisions', async () => {
+    expect(readFilesInput.safeParse({ files: [] }).success).toBe(false);
+    expect(readFilesInput.safeParse({ files: Array(11).fill({ path: 'a.md' }) }).success).toBe(false);
+    expect(readFilesInput.safeParse({ files: [{ path: 'a.md', database: 'other' }] }).success).toBe(false);
+    expect(readFilesInput.safeParse({ files: [{ path: 'a.md', startLine: 3, endLine: 2 }] }).success).toBe(false);
+    const read = vi.fn<VaultRpc['readVaultFile']>(async (request) => {
+      if (request.path === 'missing.md') return { ok: false, error: { code: 'not_found', message: 'Missing' } };
+      if (request.path === 'throw.md') throw new Error('private transport details');
+      if (request.expectedRevision === 'stale') return { ok: false, error: { code: 'revision_conflict', message: 'Reread', path: request.path, resolution: 'reread_and_reassess' } };
+      return { ok: true, data: { path: request.path, revision: '2-a', content: '雪\r\n', startLine: 2, endLine: 2, totalLines: 3, partial: true } };
+    });
+    const handlers = createVaultToolHandlers({ ...fakeRpc, readVaultFile: read }, { canRead: () => true });
+    const files = [{ path: 'missing.md' }, { path: 'throw.md' }, { path: 'a.md', expectedRevision: 'stale' }, { path: 'a.md', startLine: 2, endLine: 2, expectedRevision: '2-a' }];
+    const response = await handlers.readFiles({ files });
+    expect(response).toMatchObject({ structuredContent: { files: [
+      { index: 0, result: { ok: false, error: { code: 'not_found' } } },
+      { index: 1, result: { ok: false, error: { code: 'internal' } } },
+      { index: 2, result: { ok: false, error: { code: 'revision_conflict' } } },
+      { index: 3, result: { ok: true, data: { content: '雪\r\n', revision: '2-a', partial: true } } },
+    ] } });
+    expect(read).toHaveBeenLastCalledWith(files[3]);
+    expect(JSON.stringify(response)).not.toContain('private transport details');
+    expect(JSON.parse(response.content[0].text)).toEqual('structuredContent' in response && response.structuredContent);
+    read.mockClear();
+    expect(await handlers.readFiles({ files: [] })).toMatchObject({ isError: true });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('caps serialized batch bytes including escaped text duplication without hiding later small files', async () => {
+    const read: VaultRpc['readVaultFile'] = async ({ path }) => ({ ok: true, data: {
+      path, revision: '1-a', content: path === 'large.md' ? '\u0000'.repeat(200_000) : '雪'.repeat(50_000),
+    } });
+    const handlers = createVaultToolHandlers({ ...fakeRpc, readVaultFile: read }, { canRead: () => true });
+    const response = await handlers.readFiles({ files: [{ path: 'large.md' }, ...Array(9).fill({ path: 'small.md' })] });
+    expect(new TextEncoder().encode(JSON.stringify(response)).byteLength).toBeLessThanOrEqual(MAX_BATCH_RESPONSE_BYTES);
+    expect(response).toMatchObject({ structuredContent: { files: [
+      { index: 0, result: { omitted: true, reason: 'response_budget' } },
+      { index: 1, result: { ok: true } },
+      ...Array.from({ length: 8 }, (_, i) => ({ index: i + 2 })),
+    ] } });
   });
 
   it('does not accept a database selector in tool input', () => {
@@ -288,7 +348,7 @@ describe('MCP result and query contracts', () => {
     const result = await handlers.readFile({ path: 'notes/a.md' });
     expect(result).toHaveProperty('structuredContent');
     if ('structuredContent' in result) expect(JSON.parse(result.content[0].text)).toEqual(result.structuredContent);
-    const server = createVaultMcpServer(fakeRpc, { writesEnabled: true });
+    const server = createVaultMcpServer(fakeRpc, { writesEnabled: true, canRead: () => true, canWrite: () => true });
     const tools = (server as unknown as { _registeredTools: Record<string, { annotations: object }> })._registeredTools;
     expect(tools.get_file_outline.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     expect(tools.create_file.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
