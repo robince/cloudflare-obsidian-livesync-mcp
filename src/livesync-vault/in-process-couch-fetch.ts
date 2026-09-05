@@ -27,7 +27,7 @@ export function createInProcessCouchFetch(
       throw new TypeError('in-process CouchDB transport rejected a database identity mismatch');
     }
 
-    const incoming = new Request(sanitizedRequestInfo(input, incomingUrl), init);
+    const incoming = new Request(input, init);
     const forwardedUrl = new URL(incomingUrl);
     forwardedUrl.pathname = incomingUrl.pathname.slice(databasePath.length) || '/';
     const headers = new Headers(incoming.headers);
@@ -56,14 +56,4 @@ function requestUrl(input: RequestInfo | URL): URL {
   if (typeof input === 'string') return new URL(input);
   if (input instanceof URL) return input;
   return new URL(input.url);
-}
-
-/** Drop embedded credentials before constructing Request, which may reject them. */
-function sanitizedRequestInfo(input: RequestInfo | URL, url: URL): RequestInfo | URL {
-  if (typeof input === 'string' || input instanceof URL) {
-    url.username = '';
-    url.password = '';
-    return url;
-  }
-  return input;
 }
