@@ -46,7 +46,6 @@ type VaultDependencies = {
   acquireCommonlib: (
     profile: Extract<VaultProfileInspection, { supported: true }>,
   ) => Promise<CommonlibFacade>;
-  releaseCommonlib: (commonlib: CommonlibFacade) => Promise<void>;
 };
 
 type Cursor = { v: 1; prefix: string; id: string };
@@ -351,7 +350,7 @@ export class LiveSyncVault {
       try {
         return await operation(commonlib, profile);
       } finally {
-        await this.dependencies.releaseCommonlib(commonlib);
+        await commonlib.close();
       }
     } catch (error) {
       const structured = vaultErrorSchema.safeParse(error);

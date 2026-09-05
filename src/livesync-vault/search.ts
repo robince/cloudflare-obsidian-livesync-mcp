@@ -24,7 +24,6 @@ type SearchDependencies = {
   acquireCommonlib: (
     profile: Extract<VaultProfileInspection, { supported: true }>,
   ) => Promise<CommonlibFacade>;
-  releaseCommonlib: (commonlib: CommonlibFacade) => Promise<void>;
 };
 
 type SearchDocumentRow = {
@@ -87,7 +86,7 @@ export class LiveSyncSearch {
           ),
         };
       } finally {
-        if (commonlib) await this.dependencies.releaseCommonlib(commonlib);
+        if (commonlib) await commonlib.close();
       }
     } catch (error) {
       console.error(JSON.stringify({ message: 'search_files failed', error: errorMessage(error) }));

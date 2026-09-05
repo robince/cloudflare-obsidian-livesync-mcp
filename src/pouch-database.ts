@@ -216,7 +216,6 @@ export class PouchDatabase extends DurableObject<Env> {
         return this.inspectCommonlibProfile();
       },
       acquireCommonlib: (profile) => this.createCommonlib(profile),
-      releaseCommonlib: (commonlib) => commonlib.close(),
     });
   }
 
@@ -232,7 +231,6 @@ export class PouchDatabase extends DurableObject<Env> {
         return this.inspectCommonlibProfile();
       },
       acquireCommonlib: (profile) => this.createCommonlib(profile),
-      releaseCommonlib: (commonlib) => commonlib.close(),
     });
   }
 
