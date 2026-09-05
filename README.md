@@ -53,7 +53,8 @@ You need Node.js **22.18.x–22.x or 24.11.0 and later**, Git, a Cloudflare acco
    | Password | The `COUCHDB_PASSWORD` you set |
 
    Leave the custom chunk size at its default (`0`). See
-   [LiveSync details](#obsidian-livesync).
+   [LiveSync details](#obsidian-livesync) and configure the
+   [recommended sync mode](#recommended-sync-mode) on each device.
 
 For later updates, pull the code, install dependencies, and redeploy. Your
 installed password is preserved; keep your existing deployment configuration.
@@ -145,6 +146,44 @@ and do not raise that Cloudflare limit.
 
 The default LiveSync chunking is comfortably within the limit. Large custom
 chunk-size values intended for a conventional CouchDB server are not compatible.
+
+### Recommended sync mode
+
+For everyday use with this backend, select **Periodic and Events** in
+Self-hosted LiveSync's **Synchronisation Method** settings:
+
+| Setting | Recommended value |
+| --- | --- |
+| Sync Mode | Periodic and Events (may be labelled Periodic Sync) |
+| Periodic Sync interval | **60 seconds** |
+| Sync on Save | Enabled |
+| Sync on Editor Save | Enabled |
+| Sync on Startup | Enabled |
+| Sync on File Open | Enabled |
+| Sync after merging file | Enabled |
+
+These settings trigger finite CouchDB syncs when you work with files and every
+minute while periodic replication is running. Remote changes, including MCP
+edits, arrive on the next sync rather than immediately. If editing triggers too
+many syncs, increase **Minimum interval for syncing** to space out automatic
+event-triggered syncs.
+
+Finite syncs let the Durable Object become idle and eligible for hibernation
+between requests. Continuous **LiveSync** also works, but its long-poll requests
+can keep the object awake even when no notes change. Cloudflare meters this
+awake duration separately from CPU usage; idle objects eligible for hibernation
+do not incur duration charges. See
+[Durable Object billing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+
+Apply these settings on **every device connected to the same database**. Sync
+preferences are saved locally for each vault installation and do not propagate
+through ordinary note sync. The optional **Sync settings via markdown** feature
+can share configuration, but requires separate setup. A client left in continuous
+LiveSync mode can keep the shared object awake. Other requests or background work
+can also delay sleep; a 60-second interval does not guarantee 60 seconds asleep.
+
+Changing sync mode keeps the same CouchDB URL, database, and credentials; it does
+not require a vault rebuild or backend deployment.
 
 ## Backups
 
