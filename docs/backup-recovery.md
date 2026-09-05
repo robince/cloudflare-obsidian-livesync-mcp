@@ -58,7 +58,7 @@ same Worker name and binding. If you explicitly set `bucket_name`, retain it on
 subsequent deployments.
 Do not overwrite other account-specific settings with the template.
 
-The package requires Node 22.18 or later for the operator CLI and Wrangler
+The package requires Node 22.18.x–22.x or 24.11.0 and later for the operator CLI and Wrangler
 4.45 or later for automatic provisioning. Use `npm ci` to obtain the tested
 lockfile version. The optional MCP Worker needs no R2 binding.
 

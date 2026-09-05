@@ -5,14 +5,80 @@ SQLite Durable Object. Each CouchDB database name maps to one Durable Object,
 so its writes are serialised and its data remains isolated from every other
 database.
 
+## Get started: Obsidian sync server
+
+Deploy your own `obsidian-sync` Worker, then connect Obsidian LiveSync to it.
+This setup needs no MCP Worker or GitHub OAuth app.
+
+You need Node.js **22.18.x–22.x or 24.11.0 and later**, Git, a Cloudflare account, and access to this repository while it is private.
+
+1. Clone the repository and install its dependencies:
+
+   ```sh
+   git clone https://github.com/robince/cloudflare-obsidian-livesync.git
+   cd cloudflare-obsidian-livesync
+   npm ci
+   ```
+
+2. Create your deployment configuration and password file:
+
+   ```sh
+   cp wrangler.jsonc wrangler.deploy.jsonc
+   cp .dev.vars.example .dev.vars
+   ```
+
+   In `.dev.vars`, replace the `COUCHDB_PASSWORD` placeholder with a strong,
+   unique password. The default username is `admin`; change `COUCHDB_USERNAME`
+   in `wrangler.deploy.jsonc` if needed. Both files are ignored by Git; keep a
+   private backup of them.
+
+3. Sign in to Cloudflare and deploy **only the sync server**:
+
+   ```sh
+   npx wrangler login
+   npm run deploy:storage -- --secrets-file .dev.vars
+   ```
+
+   This creates the `obsidian-sync` Worker and provisions its Durable Object
+   namespace for database storage. Wrangler prints your Worker URL when it finishes.
+
+4. In Obsidian's Self-hosted LiveSync plugin, enter these CouchDB settings on
+   each device:
+
+   | Setting | Value |
+   | --- | --- |
+   | URI | The Worker URL, without a database suffix |
+   | Database name | A lower-case name of your choice, for example `vault` |
+   | Username | `admin`, unless you changed `COUCHDB_USERNAME` |
+   | Password | The `COUCHDB_PASSWORD` you set |
+
+   Leave the custom chunk size at its default (`0`). See
+   [LiveSync details](#obsidian-livesync).
+
+For later updates, pull the code, install dependencies, and redeploy. Your
+installed password is preserved; keep your existing deployment configuration.
+Follow any migration instructions in [DEPLOY.md](DEPLOY.md) when updating.
+
+```sh
+git pull
+npm ci
+npm run deploy:storage
+```
+
+**Optional MCP access:** To let an MCP client use your vault, follow
+[the separate MCP setup](DEPLOY.md#deploy-the-mcp-worker). It requires a GitHub
+OAuth app and additional configuration. `npm run deploy:mcp` deploys MCP alone;
+`npm run deploy` deploys **both** Workers and should only be used after both are
+configured.
+
+**Deploy button:** The button requires a public repository and a storage-only
+deploy command override. Read [the button instructions](DEPLOY.md#deploy-from-a-public-repository)
+before using it; the Wrangler steps above are the documented setup path.
+
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/robince/cloudflare-obsidian-livesync)
 
-See [DEPLOY.md](DEPLOY.md) for private-repository collaborator instructions,
-required secrets, and the public one-click deployment flow.
-
-The immediate target is Obsidian LiveSync. The same Durable Object also exposes
-RPC methods so another Worker can read and write the vault without going back
-through HTTP, for example an Obsidian MCP Worker.
+**For developers:** `npm run deploy:dev` deploys the separate dev environment;
+see [environment setup](DEPLOY.md#default-and-development-deployments).
 
 ## Current status
 
@@ -42,11 +108,6 @@ vault access and a separate MCP Worker are documented in
 See the [forward roadmap](docs/roadmap.md) for the next priorities: reliable,
 approachable open-source deployment into an individual Cloudflare free account,
 with optional MCP access.
-
-## Deploy
-
-Follow [DEPLOY.md](DEPLOY.md) to deploy from this private repository with
-Wrangler. The Deploy to Cloudflare button works once the repository is public.
 
 ## Local development
 
@@ -103,7 +164,7 @@ Bind the existing Durable Object class from another Worker:
       {
         "name": "POUCH_DATABASES",
         "class_name": "PouchDatabase",
-        "script_name": "cloudflare-pouchdb"
+        "script_name": "obsidian-sync"
       }
     ]
   }

@@ -57,6 +57,9 @@ here. Make that distinction explicit in descriptions before considering renames.
 Keep the 15-tool surface; no new profile framework, aliases or generic operation
 dispatcher are needed. Current server instructions and descriptions cover:
 
+- Obsidian Markdown synced via LiveSync: wikilinks for note references and
+  backlinks, aliases, heading/block links, embeds, callouts, valid frontmatter,
+  inline/nested/property tags, and meaningful file paths and titles.
 - `list_files` for path discovery and inventory; `search_files` for content or
   property conditions, including recursive subtree prefixes.
 - `read_file` for a known path; `read_files` for several selected notes; an

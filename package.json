@@ -37,10 +37,13 @@
     "types:storage": "wrangler types --strict-vars=false",
     "types:check:storage": "wrangler types --strict-vars=false --check",
     "deploy": "npm run deploy:storage && npm run deploy:mcp",
-    "deploy:storage": "wrangler deploy --config wrangler.deploy.jsonc",
-    "deploy:mcp": "wrangler deploy --config apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc",
+    "deploy:storage": "wrangler deploy --config wrangler.deploy.jsonc --env \"\"",
+    "deploy:mcp": "wrangler deploy --config apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc --env \"\"",
     "dry-run": "npm run dry-run:storage && npm run dry-run --workspaces --if-present",
     "dry-run:storage": "wrangler deploy --dry-run --outdir dist/storage",
+    "deploy:dev": "npm run deploy:storage:dev && npm run deploy:mcp:dev",
+    "deploy:storage:dev": "wrangler deploy --config wrangler.deploy.jsonc --env dev",
+    "deploy:mcp:dev": "wrangler deploy --config apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc --env dev",
     "backup": "node --experimental-strip-types scripts/backup.mjs",
     "test:backup": "vitest run test/backup.test.ts && node --experimental-strip-types --test test/backup-cli.test.mjs"
   },
@@ -69,6 +72,6 @@
     "wrangler": "^4.45.0"
   },
   "engines": {
-    "node": ">=22.18.0"
+    "node": "^22.18.0 || >=24.11.0"
   }
 }
