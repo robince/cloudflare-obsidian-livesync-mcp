@@ -74,5 +74,5 @@ boundaries, gaps between successes, and policy changes. Partial imports remain
 inaccessible and failed exports release their write gate.
 
 These tests establish the documented recovery procedure for the pinned client
-and tested data. They do not complete the roadmap's broader search diagnostics,
-mobile behaviour, initial-import limits, or free-tier cost measurements.
+and tested data. They do not establish broader search diagnostics, mobile
+behaviour, initial-import limits, or free-tier cost measurements.

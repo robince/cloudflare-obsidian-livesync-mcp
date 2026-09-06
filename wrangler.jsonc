@@ -82,7 +82,8 @@
   },
   "r2_buckets": [
     {
-      "binding": "BACKUP_BUCKET"
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "obsidian-sync-backups"
     }
   ],
   "triggers": {

@@ -1,7 +1,11 @@
 # Residual issues
 
-This note records the deliberately deferred limitations after the guarded-write
-checkpoint. It targets Self-hosted LiveSync 1.0.21 and Commonlib 0.1.19 only.
+This note records remaining limitations and dependency workarounds for the
+implemented sync and MCP servers. Compatibility evidence uses Self-hosted
+LiveSync 1.0.21 and Commonlib 0.1.19.
+
+The Worker WASM initialization issue is resolved by the existing xxHash shim;
+see [Worker hashing compatibility](development.md#worker-hashing-compatibility).
 
 ## Deep listing pages still rescan earlier documents
 
@@ -33,25 +37,9 @@ The automatic budget is eight pairs, sixteen live leaves, and 512,000 bytes /
 1,024 chunks per required body. Over-limit, missing-history, missing-chunk,
 delete-versus-modify, and differing binary cases are left to Obsidian. No newer-
 mtime binary policy, background resolver, or attachment storage
-change is implemented. Real-client staging evidence is recorded separately;
-hermetic revision-tree tests alone do not constitute staging acceptance.
-
-## Worker WASM support and the xxhash compatibility shim
-
-Workers support imported, precompiled WebAssembly modules. They do not permit
-compiling or instantiating raw WASM bytes at runtime.
-
-Commonlib 0.1.19 imports Octagonal Wheels' browser-oriented xxhash loader. That
-loader embeds WASM in a `Uint8Array` and calls `WebAssembly.instantiate(bytes)`,
-which workerd rejects. The installed `xxhash-wasm` package also provides a
-`workerd` export that imports `xxhash.wasm` as a compiled module and produces
-the same xxhash32/xxhash64 results.
-
-The storage Worker aliases only Octagonal Wheels' xxhash entrypoint to a small
-compatibility module backed by that Worker export. Commonlib still selects
-`xxhash64` and continues to own LiveSync hashing, splitting, and serialization.
-The alias should be removed when Octagonal Wheels or Commonlib ships an
-equivalent Worker-aware loader.
+change is implemented. The [real-client conflict staging matrix](conflict-staging-results.md)
+passed, including concurrent creates, overlapping edits, and binary conflicts.
+Those results cover the documented cases and versions.
 
 ## Create CAS requires a pinned Commonlib compatibility patch
 
@@ -59,8 +47,8 @@ The normal LiveSync plugin create flow begins with a host vault adapter and a
 filesystem event. A Worker has no vault filesystem, so it correctly uses
 `DirectFileManipulator` to write the LiveSync database directly.
 
-Commonlib's published `putDBEntryWithLiveBaseRevision` always adds `_rev` and
-therefore only supports updates. Its default `putDBEntry` rereads and then uses
+In the pinned Commonlib release, `putDBEntryWithLiveBaseRevision` adds
+`_rev: undefined` when no base revision is supplied, which PouchDB rejects. Its default `putDBEntry` rereads and then uses
 a forced put, which can overwrite a concurrent create. The install-time,
 version-checked patch makes the revision-aware function omit `_rev` only when
 the caller supplies no base revision. Commonlib still writes chunks and builds
@@ -90,10 +78,11 @@ Replacing a decoder underneath an active operation would be less safe.
 
 ## Deployment identifiers remain out of the repository
 
-The committed OAuth KV preview ID is a local placeholder. Staging and
-production must supply real namespace identifiers, OAuth application values,
-allowlists, domains, and secrets out of band. No fabricated or environment-
-specific identifier should be committed merely to make a static review quiet.
+The committed OAuth KV configuration contains only the `OAUTH_KV` binding;
+there is no placeholder namespace or preview ID. Wrangler provisions the
+namespace on first deployment. Keep its assigned ID and other account-specific
+settings in the ignored deployment configuration, and credentials in Worker
+secrets. See [MCP deployment](../DEPLOY.md#deploy-the-mcp-worker).
 
 ## Contract 5 follow-up boundaries
 
@@ -103,4 +92,4 @@ budget. Maintenance still requires completed replication and paused writers;
 a disconnected client may hold references the server has never received.
 Outline parsing has explicit complexity limits in addition to the unchanged
 note-size limit. Obsidian attachment placement, relative links, case handling
-and move effects require the next-stage settings review in [roadmap.md](roadmap.md).
+and move effects still require a settings review.

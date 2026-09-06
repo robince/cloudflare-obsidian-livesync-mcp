@@ -21,14 +21,37 @@ The storage configuration uses:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BACKUP_DATABASE` | `vault` | The single LiveSync database to protect |
-| `BACKUP_ENABLED` | `true` | Enable the scheduled backup check |
+| `BACKUP_ENABLED` | `true` | Include R2 backup resources at deployment and enable scheduled backups |
 | `BACKUP_DAILY` | `30` | Daily recovery points |
 | `BACKUP_WEEKLY` | `8` | Weekly recovery points |
 | `BACKUP_MONTHLY` | `24` | Monthly recovery points |
 
 Set `BACKUP_DATABASE` to the database name entered in LiveSync. A missing
 database produces an error; the backup job does not create an empty database.
-Manual backups remain available when scheduled backups are disabled.
+Deploying with backups disabled also omits the R2 binding, so manual R2
+backup and restore operations are unavailable.
+
+### Deploy without R2
+
+Set `vars.BACKUP_ENABLED` to the string `"false"` in the ignored
+`wrangler.deploy.jsonc`, then run `npm run deploy:storage`. For dev, set
+`env.dev.vars.BACKUP_ENABLED` and run `npm run deploy:storage:dev`.
+
+The deployment script omits `BACKUP_BUCKET` and clears the backup cron schedule
+in a temporary configuration. Your saved binding and schedule stay intact.
+Set the flag back to `"true"` and redeploy to enable backups again; activate R2
+first if necessary. Existing bucket contents are not deleted when disabling
+backups. Keep the same bucket name when re-enabling to retain access to them.
+
+Sync and MCP work without R2. Manual R2 backup and restore operations require
+the binding, so keep independent backups while it is disabled.
+
+Use the npm deployment commands: calling `wrangler deploy` directly bypasses
+this configuration step. Changing the flag only in the Cloudflare dashboard
+stops scheduling in the running Worker but does not remove its R2 binding or
+cron triggers; edit the deployment file and redeploy instead.
+
+### Schedule and retention
 
 The hourly cron (`0 * * * *`) checks whether a successful backup exists for
 today. From 03:00 UTC, it attempts one if needed and retries failures on later

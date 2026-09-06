@@ -4,17 +4,15 @@ This guide deploys the Cloudflare PouchDB storage Worker to your own Cloudflare
 account. The optional MCP Worker can be deployed alongside it after its GitHub
 OAuth settings are configured.
 
-## Deploy from this private repository
+## Deploy from your computer
 
-Cloudflare's Deploy to Cloudflare button supports public repositories only. If
-you have been added as a collaborator while this repository is private, deploy
-with Wrangler instead:
+Use Wrangler to deploy from a local checkout:
 
 1. Install Node.js 22.18.x–22.x or 24.11.0 and later and clone the repository.
 
    ```sh
-   git clone git@github.com:robince/cloudflare-obsidian-livesync.git
-   cd cloudflare-obsidian-livesync
+   git clone https://github.com/robince/cloudflare-obsidian-livesync-mcp.git
+   cd cloudflare-obsidian-livesync-mcp
    npm ci
    ```
 
@@ -42,19 +40,67 @@ an encrypted Worker secret, and prints the deployed `workers.dev` URL.
 You do not need to create a Cloudflare API token or copy an account ID, database
 ID, or Durable Object ID.
 
-## Deploy from a public repository
+## Deploy with the Cloudflare button
 
-The current button targets the root storage Worker. It cannot configure and
-deploy the optional MCP workspace at the same time. Cloudflare detects the
-`deploy` script, but that script requires the ignored deployment configurations;
-a fresh button deployment must override the deploy command with
-`npx wrangler deploy --env ""` to use the committed storage template.
-It presents the storage variables and password, not the MCP OAuth settings.
-Use the Wrangler instructions below for MCP.
+The button deploys **only the storage Worker**, its SQLite Durable Object,
+private R2 backup bucket, and backup schedule. It does not deploy the MCP Worker.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/robince/cloudflare-obsidian-livesync)
+[![Deploy sync server to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/robince/cloudflare-obsidian-livesync-mcp)
 
-The source repository must be public for the button to work.
+On Cloudflare's setup page:
+
+1. Choose the target account and repository name. Enable R2 on the account
+   if using backups. For setup without R2 checkout, use the local deployment
+   steps above with `BACKUP_ENABLED` set to `"false"`.
+2. Keep the build root at the repository root and the build command blank.
+   **Replace the prefilled deploy command** with:
+
+   ```sh
+   npm run deploy:storage:template
+   ```
+
+   Cloudflare detects our `npm run deploy` script, which needs ignored local
+   configurations and deploys both Workers. It is unsuitable for this button.
+3. Review the prompted settings:
+
+   | Setting | What to enter |
+   | --- | --- |
+   | Worker name | `obsidian-sync`, or your own name |
+   | `COUCHDB_PASSWORD` | A strong, unique password; save it for LiveSync |
+   | `COUCHDB_USERNAME` | `admin`, or your preferred username |
+   | `CORS_ORIGINS` | Keep the default for Obsidian desktop and mobile |
+   | `BACKUP_DATABASE` | Your LiveSync database name; default `vault` |
+   | `BACKUP_ENABLED` | `true` for daily backups; `false` to omit backup resources |
+   | `BACKUP_DAILY`, `BACKUP_WEEKLY`, `BACKUP_MONTHLY` | Retention counts; defaults `30`, `8`, `24` |
+   | `BACKUP_BUCKET` | A private backup bucket for this installation |
+
+   The password prompt comes from the committed `.dev.vars.example`; non-secret
+   settings come from `wrangler.jsonc`. `package.json` supplies the field
+   descriptions. No local `.dev.vars` or `wrangler.deploy.jsonc` is needed for
+   this browser setup. Never use the example password unchanged.
+4. Deploy, then enter the resulting Worker URL, database, username, and password
+   in Obsidian LiveSync. Follow the README's recommended sync mode.
+
+Cloudflare creates a copy of the repository and records resource configuration
+there. For subsequent Workers Builds deployments, retain the storage-only command
+above. If you later deploy locally, copy that installation's updated configuration
+into `wrangler.deploy.jsonc`, preserving its Worker name and provisioned resources.
+
+### Why there is no MCP deploy button
+
+Cloudflare supports separate buttons for separate Workers, but a button targeting
+a subdirectory copies only that subdirectory into the new repository. The MCP
+workspace depends on the root lockfile, workspace installation, and
+`packages/livesync-contracts`, so an `apps/cloudflare-obsidian-mcp` button would
+produce an incomplete project.
+
+MCP also needs an existing storage Worker in the same account, a matching
+`POUCH_DATABASES.script_name` binding, and a GitHub OAuth app with the correct
+callback and allowed user IDs. Use [the MCP setup](#deploy-the-mcp-worker) after
+storage. A future MCP button would require a self-contained template plus those
+external setup steps; it would not deploy both Workers automatically.
+
+See Cloudflare's [button configuration and monorepo limitations](https://developers.cloudflare.com/workers/platform/deploy-buttons/).
 
 ## Configuration
 
@@ -71,6 +117,14 @@ npx wrangler secret put COUCHDB_PASSWORD --config wrangler.deploy.jsonc
 ```
 
 ## Vault backups
+
+To deploy without backups or R2 checkout, set `vars.BACKUP_ENABLED` to the
+string `"false"` in `wrangler.deploy.jsonc` and use `npm run deploy:storage`.
+For dev, set `env.dev.vars.BACKUP_ENABLED` and use `npm run deploy:storage:dev`.
+The scripts omit the R2 binding and clear the cron schedule automatically;
+no other settings need changing. Set it back to `"true"` and redeploy to
+restore backup functionality. Existing R2 objects are not deleted.
+
 
 Set `BACKUP_DATABASE` in the storage deployment configuration to the same database
 name used in LiveSync (default `vault`). The deployment provisions a private R2
@@ -107,7 +161,10 @@ or the existing Cloudflare secret store.
 Back up deployment files separately: Git clones do not restore them. These are
 full configuration copies, so carry shared code-entry, binding, migration, and
 compatibility changes into the deployment copies when updating the templates.
-There is no custom configuration-merging step.
+The storage deployment script reads `BACKUP_ENABLED` from the selected
+environment. When it is `"false"`, it passes Wrangler a temporary copy without
+the backup R2 binding and with an empty cron schedule. It leaves the saved
+configuration intact. Enabled deployments use the saved file directly.
 
 For automated deployment, supply the deployment file to the build environment
 before running the deploy scripts. Do not commit account-specific values merely

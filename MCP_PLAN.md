@@ -1,8 +1,7 @@
 # Obsidian LiveSync MCP — minimal write-capable plan
 
-For future priorities, see the [forward roadmap](docs/roadmap.md), focused on
-open-source deployment into individual Cloudflare free accounts. This document
-retains the detailed implementation checkpoints and acceptance history.
+This document retains the detailed implementation checkpoints and acceptance
+history.
 
 ## Goal
 
@@ -416,7 +415,6 @@ frontmatter contract types, and bounded HTML-aware outline parsing. Regression
 coverage includes sparse replication, retained conflicts, ID reuse, typed filters,
 exhaustive pagination, stale ranges and a concurrent-edit copy/delete failure.
 Authoritative database/revision state is preserved; only derived tables rebuild.
-The next-stage Obsidian settings review is recorded in docs/roadmap.md.
 
 Local validation completed: dependency provenance/type checks, full existing test
 suite (including real MCP client and OAuth flows), generated-type checks, both

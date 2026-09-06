@@ -13,6 +13,24 @@
       },
       "CORS_ORIGINS": {
         "description": "Allowed browser origins. The default supports Obsidian desktop, mobile, and local development."
+      },
+      "BACKUP_DATABASE": {
+        "description": "Use the same database name you will enter in Obsidian LiveSync. Default: `vault`."
+      },
+      "BACKUP_ENABLED": {
+        "description": "Keep true for daily R2 backups, or set false to deploy without R2 or its checkout using the storage deployment script."
+      },
+      "BACKUP_DAILY": {
+        "description": "Daily recovery points to retain. Default: `30`."
+      },
+      "BACKUP_WEEKLY": {
+        "description": "Weekly recovery points to retain. Default: `8`."
+      },
+      "BACKUP_MONTHLY": {
+        "description": "Monthly recovery points to retain. Default: `24`."
+      },
+      "BACKUP_BUCKET": {
+        "description": "Private R2 bucket for this installation's vault backups. Use a separate bucket for each installation."
       }
     }
   },
@@ -29,7 +47,7 @@
     "test:dependencies": "node --test test/production-dependencies.test.mjs && node --experimental-strip-types --test test/backup-cli.test.mjs",
     "fixture:livesync": "node scripts/generate-livesync-fixture.mjs",
     "test:current-pouchdb": "vitest run test/current-pouchdb.test.ts",
-    "test:all": "npm test && npm run test --workspaces --if-present && npm run test:staging-config && npm run test:diagnostics",
+    "test:all": "npm test && npm run test --workspaces --if-present && npm run test:staging-config && npm run test:diagnostics && npm run test:deploy",
     "test:staging-config": "node --test test/staging-config.test.mjs",
     "test:upstream-pouchdb": "npm run test:current-pouchdb",
     "types": "npm run types:storage && npm run types --workspaces --if-present",
@@ -37,17 +55,19 @@
     "types:storage": "wrangler types --strict-vars=false",
     "types:check:storage": "wrangler types --strict-vars=false --check",
     "deploy": "npm run deploy:storage && npm run deploy:mcp",
-    "deploy:storage": "wrangler deploy --config wrangler.deploy.jsonc --env \"\"",
+    "deploy:storage": "node scripts/deploy-storage.mjs wrangler.deploy.jsonc \"\"",
     "deploy:mcp": "wrangler deploy --config apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc --env \"\"",
     "dry-run": "npm run dry-run:storage && npm run dry-run --workspaces --if-present",
-    "dry-run:storage": "wrangler deploy --dry-run --outdir dist/storage",
+    "dry-run:storage": "node scripts/deploy-storage.mjs wrangler.jsonc \"\" --dry-run --outdir dist/storage",
     "deploy:dev": "npm run deploy:storage:dev && npm run deploy:mcp:dev",
-    "deploy:storage:dev": "wrangler deploy --config wrangler.deploy.jsonc --env dev",
+    "deploy:storage:dev": "node scripts/deploy-storage.mjs wrangler.deploy.jsonc dev",
     "deploy:mcp:dev": "wrangler deploy --config apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc --env dev",
     "backup": "node --experimental-strip-types scripts/backup.mjs",
     "test:backup": "vitest run test/backup.test.ts && node --experimental-strip-types --test test/backup-cli.test.mjs",
     "diagnostics": "node scripts/diagnostics.mjs",
-    "test:diagnostics": "node --test test/diagnostics.test.mjs"
+    "test:diagnostics": "node --test test/diagnostics.test.mjs",
+    "deploy:storage:template": "node scripts/deploy-storage.mjs wrangler.jsonc \"\"",
+    "test:deploy": "node --test test/deploy-storage.test.mjs"
   },
   "dependencies": {
     "@cloudflare-obsidian-livesync/contracts": "workspace:*",

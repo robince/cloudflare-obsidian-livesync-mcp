@@ -1,242 +1,216 @@
-# Cloudflare PouchDB
+# Obsidian LiveSync on Cloudflare
 
-An experimental CouchDB-compatible endpoint backed by a PouchDB database in a
-SQLite Durable Object. Each CouchDB database name maps to one Durable Object,
-so its writes are serialised and its data remains isolated from every other
-database.
+Sync your Obsidian notes between devices, and optionally give your AI tools a
+shared place to read and save notes. This project lets you deploy your own
+Self-hosted LiveSync server on Cloudflare's free tier, with a separate cloud
+MCP server for access from compatible AI products.
 
-## Get started: Obsidian sync server
+There are two components, deployed to your own Cloudflare account:
 
-Deploy your own `obsidian-sync` Worker, then connect Obsidian LiveSync to it.
-This setup needs no MCP Worker or GitHub OAuth app.
+| Component | What it does | When you need it |
+| --- | --- | --- |
+| **Sync server** (`obsidian-sync`) | A CouchDB-compatible server for Obsidian's Self-hosted LiveSync plugin, with daily R2 backups. | Use it on its own to sync notes between desktop and mobile. |
+| **MCP server** (`obsidian-mcp`) | A simple, authenticated interface for AI tools to read and update one vault. | Optional; connects to the sync server's storage. |
 
-You need Node.js **22.18.x–22.x or 24.11.0 and later**, Git, a Cloudflare account, and access to this repository while it is private.
+I expect normal personal use—one vault, even with LiveSync running all the
+time—to fit within Cloudflare's generous free tier. Multiple vaults, heavy use,
+or large backups could push you beyond those allowances. See the
+[Durable Objects allowances](https://developers.cloudflare.com/durable-objects/platform/pricing/)
+and [R2 free tier](https://developers.cloudflare.com/r2/pricing/).
 
-1. Clone the repository and install its dependencies:
+**This is experimental. Start with a disposable vault, and read the
+[caveats](#caveats) before trusting it with notes.**
 
-   ```sh
-   git clone https://github.com/robince/cloudflare-obsidian-livesync.git
-   cd cloudflare-obsidian-livesync
-   npm ci
-   ```
+## How to use
 
-2. Create your deployment configuration and password file:
+You need a **Cloudflare account**, Git, and
+Node.js **22.18.x–22.x or 24.11.0 and later**. Install
+[Self-hosted LiveSync](https://github.com/vrtmrz/obsidian-livesync) in Obsidian on
+each device. A **GitHub account and OAuth app** are needed if you add MCP
+access; a GitHub account is also needed for the Deploy to Cloudflare button.
 
-   ```sh
-   cp wrangler.jsonc wrangler.deploy.jsonc
-   cp .dev.vars.example .dev.vars
-   ```
+### 1. Deploy the sync server
 
-   In `.dev.vars`, replace the `COUCHDB_PASSWORD` placeholder with a strong,
-   unique password. The default username is `admin`; change `COUCHDB_USERNAME`
-   in `wrangler.deploy.jsonc` if needed. Both files are ignored by Git; keep a
-   private backup of them.
-
-3. Sign in to Cloudflare and deploy **only the sync server**:
-
-   ```sh
-   npx wrangler login
-   npm run deploy:storage -- --secrets-file .dev.vars
-   ```
-
-   This creates the `obsidian-sync` Worker and provisions its Durable Object
-   namespace for database storage. Wrangler prints your Worker URL when it finishes.
-
-4. In Obsidian's Self-hosted LiveSync plugin, enter these CouchDB settings on
-   each device:
-
-   | Setting | Value |
-   | --- | --- |
-   | URI | The Worker URL, without a database suffix |
-   | Database name | A lower-case name of your choice, for example `vault` |
-   | Username | `admin`, unless you changed `COUCHDB_USERNAME` |
-   | Password | The `COUCHDB_PASSWORD` you set |
-
-   Leave the custom chunk size at its default (`0`). See
-   [LiveSync details](#obsidian-livesync) and configure the
-   [recommended sync mode](#recommended-sync-mode) on each device.
-
-For later updates, pull the code, install dependencies, and redeploy. Your
-installed password is preserved; keep your existing deployment configuration.
-Follow any migration instructions in [DEPLOY.md](DEPLOY.md) when updating.
+Clone the repository and create your local configuration:
 
 ```sh
-git pull
+git clone https://github.com/robince/cloudflare-obsidian-livesync-mcp.git
+cd cloudflare-obsidian-livesync-mcp
 npm ci
-npm run deploy:storage
+cp wrangler.jsonc wrangler.deploy.jsonc
+cp .dev.vars.example .dev.vars
 ```
 
-**Optional MCP access:** To let an MCP client use your vault, follow
-[the separate MCP setup](DEPLOY.md#deploy-the-mcp-worker). It requires a GitHub
-OAuth app and additional configuration. `npm run deploy:mcp` deploys MCP alone;
-`npm run deploy` deploys **both** Workers and should only be used after both are
-configured.
-
-**Deploy button:** The button requires a public repository and a storage-only
-deploy command override. Read [the button instructions](DEPLOY.md#deploy-from-a-public-repository)
-before using it; the Wrangler steps above are the documented setup path.
-
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/robince/cloudflare-obsidian-livesync)
-
-**For developers:** `npm run deploy:dev` deploys the separate dev environment;
-see [environment setup](DEPLOY.md#default-and-development-deployments).
-
-## Current status
-
-The implementation passes workerd integration tests for:
-
-- database creation, information, and deletion;
-- document CRUD, local checkpoint documents, attachments, `_bulk_docs`, and
-  `_all_docs`;
-- `_changes` normal, selector-filtered, long-poll, and LiveSync's bounded
-  newline-delimited continuous feed;
-- `_revs_diff`, `_bulk_get`, and remote-to-remote PouchDB replication;
-- the Mango selector subset LiveSync uses;
-- LiveSync's `chunks/collectDangling` maintenance view and remote `_purge`;
-- compaction, Basic authentication, CORS, and LiveSync's CouchDB configuration
-  probes;
-- direct Durable Object RPC from another Worker.
-
-The hermetic protocol suite runs against the pinned registry dependencies. A
-separate upstream-compatibility job checks out and builds current PouchDB before
-dependency upgrades and on its scheduled run. This is a focused compatibility server, not a general
-replacement for every CouchDB feature; see [COMPATIBILITY.md](COMPATIBILITY.md).
-
-The selected architecture and phased implementation plan for logical Obsidian
-vault access and a separate MCP Worker are documented in
-[MCP_PLAN.md](MCP_PLAN.md).
-
-See the [forward roadmap](docs/roadmap.md) for the next priorities: reliable,
-approachable open-source deployment into an individual Cloudflare free account,
-with optional MCP access.
-
-## Local development
-
-This npm workspace uses one lockfile and registry-backed production
-dependencies; a clean clone does not require sibling repositories.
+Generate a strong password with:
 
 ```sh
-npm install
-cp .dev.vars.example .dev.vars
-npm run types
-npm run check
-npm test
-npx wrangler dev
+openssl rand -hex 32
 ```
 
-`COUCHDB_USERNAME` and `CORS_ORIGINS` are non-secret variables in
-`wrangler.jsonc`. Do not put the password in that file.
+Copy the result into `.dev.vars` as `COUCHDB_PASSWORD`. In
+`wrangler.deploy.jsonc`, set `BACKUP_DATABASE` to your intended LiveSync database name (default `vault`).
+Keep both files private and backed up.
 
-## Obsidian LiveSync
+**Choose whether to use backups before deploying:**
 
-Use these CouchDB settings in LiveSync:
+- **With backups (default):** In the Cloudflare dashboard, open **Storage &
+  databases → R2 → Overview** and complete the R2 checkout to activate it.
+  R2 includes **10 GB of free storage per month** (measured as GB-month), plus
+  free monthly operation allowances. Usage above those allowances is billed.
+  Deployment creates the backup bucket for you. See
+  [R2 setup](https://developers.cloudflare.com/r2/get-started/) and
+  [free-tier details](https://developers.cloudflare.com/r2/pricing/).
+- **Without backups or R2 checkout:** Set `vars.BACKUP_ENABLED` to the string
+  `"false"` in `wrangler.deploy.jsonc`. The deployment script automatically
+  leaves out the R2 binding and backup schedule. Sync and MCP still work;
+  keep your own backups. Set it back to `"true"` and redeploy to enable backups.
 
-- URI: the deployed Worker URL, without a database suffix;
-- database name: a lower-case CouchDB name such as `vault`;
-- username: the configured `COUCHDB_USERNAME` (`admin` by default);
-- password: `COUCHDB_PASSWORD`.
+Then deploy:
 
-The endpoint supports LiveSync's setup and configuration checks. Leave
-LiveSync's custom chunk size at its default (`0`, approximately 100 KB chunks).
-Durable Object SQLite has a hard 2 MB maximum for any single string or BLOB;
-this service rejects documents above 1.8 MB and attachments above 900 KB to
-preserve room for PouchDB metadata and binary-string encoding. The emulated
-CouchDB configuration values exist for LiveSync's CouchDB-specific setup check
-and do not raise that Cloudflare limit.
+```sh
+npx wrangler login
+npm run deploy:storage -- --secrets-file .dev.vars
+```
 
-The default LiveSync chunking is comfortably within the limit. Large custom
-chunk-size values intended for a conventional CouchDB server are not compatible.
+Wrangler creates the configured resources and prints your sync server URL.
+For the full procedure,
+updates, and the Deploy to Cloudflare button, see [Deployment](DEPLOY.md).
+
+### 2. Connect Obsidian
+
+In Self-hosted LiveSync, configure CouchDB with:
+
+| Setting | Value |
+| --- | --- |
+| URI | Your sync Worker URL, without a database suffix |
+| Database | `vault`, or the name you chose above |
+| Username | `admin`, unless you changed `COUCHDB_USERNAME` |
+| Password | Your `COUCHDB_PASSWORD` |
+
+Keep the custom chunk size at its default (`0`). Sync a test note between
+devices before adding MCP.
 
 ### Recommended sync mode
 
-For everyday use with this backend, select **Periodic and Events** in
-Self-hosted LiveSync's **Synchronisation Method** settings:
+Start with **LiveSync** mode on every device. I've had better luck with it.
+Once syncing is working, you can try **Periodic and Events** with a
+**60-second interval** to let the server become idle between syncs. In that
+mode, AI edits arrive on the next sync. See
+[LiveSync settings](docs/livesync-settings.md) for the options.
 
-| Setting | Recommended value |
-| --- | --- |
-| Sync Mode | Periodic and Events (may be labelled Periodic Sync) |
-| Periodic Sync interval | **60 seconds** |
-| Sync on Save | Enabled |
-| Sync on Editor Save | Enabled |
-| Sync on Startup | Enabled |
-| Sync on File Open | Enabled |
-| Sync after merging file | Enabled |
+## Optional: give AI tools access with MCP
 
-These settings trigger finite CouchDB syncs when you work with files and every
-minute while periodic replication is running. Remote changes, including MCP
-edits, arrive on the next sync rather than immediately. If editing triggers too
-many syncs, increase **Minimum interval for syncing** to space out automatic
-event-triggered syncs.
+The separate MCP Worker gives compatible AI products an always-available cloud
+endpoint for your vault, even when Obsidian is closed. Your AI product must
+support remote MCP with OAuth. Once the server is configured, connecting a
+client needs just its MCP URL and a GitHub sign-in.
 
-Finite syncs let the Durable Object become idle and eligible for hibernation
-between requests. Continuous **LiveSync** also works, but its long-poll requests
-can keep the object awake even when no notes change. Cloudflare meters this
-awake duration separately from CPU usage; idle objects eligible for hibernation
-do not incur duration charges. See
-[Durable Object billing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+**Your vault must have LiveSync encryption disabled for MCP access.** The data
+is hosted in your own Cloudflare account, and authorized AI clients can read
+the notes you give them access to.
 
-Apply these settings on **every device connected to the same database**. Sync
-preferences are saved locally for each vault installation and do not propagate
-through ordinary note sync. The optional **Sync settings via markdown** feature
-can share configuration, but requires separate setup. A client left in continuous
-LiveSync mode can keep the shared object awake. Other requests or background work
-can also delay sleep; a 60-second interval does not guarantee 60 seconds asleep.
+The interface is deliberately small and focused on notes:
 
-Changing sync mode keeps the same CouchDB URL, database, and credentials; it does
-not require a vault rebuild or backend deployment.
+- Find files, search note text or frontmatter properties, and read notes,
+  sections, outlines, or small attachments.
+- Create notes, append text, make targeted edits, update frontmatter, or delete
+  notes when writes are enabled.
+- Work with one configured vault. Existing-note changes require the revision
+  that was read, so stale edits are rejected; unresolved sync conflicts are
+  reported for resolution in Obsidian.
 
-## Backups
+Writes are **disabled by default**. GitHub sign-in is restricted to an allowlist
+of numeric account IDs. The interface exposes neither arbitrary database
+queries nor code execution. See the [MCP reference](apps/cloudflare-obsidian-mcp/README.md)
+for tools and limits.
 
-Daily backups export the single configured vault to a private R2 bucket provisioned
-at deployment, with 30 daily, 8 weekly, and 24 monthly recovery points.
-See [backup and recovery](docs/backup-recovery.md) for configuration, offline vault
-extraction, and restore through LiveSync.
+### Vault-specific AI instructions
 
-## Access from another Worker
+Add an optional `_AI_INSTRUCTIONS.md` note at the root of your vault to describe
+your folder layout, naming conventions, and templates. For example, specify
+where conversation summaries and daily notes belong, which timezone to use,
+and where to put attachments. Sync it like any other note.
 
-Bind the existing Durable Object class from another Worker:
+The MCP server instructs AI clients to read this note before writing. These
+conventions guide the AI; they are not enforced by the server, do not grant
+write access, and do not override your explicit requests.
 
-```jsonc
-{
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "POUCH_DATABASES",
-        "class_name": "PouchDatabase",
-        "script_name": "obsidian-sync"
-      }
-    ]
-  }
-}
+### 3. Configure GitHub OAuth and deploy MCP
+
+1. Choose your MCP origin: `https://obsidian-mcp.<account-subdomain>.workers.dev`,
+   using the same account subdomain as the sync server.
+2. In GitHub **Settings → Developer settings → OAuth Apps**, create an
+   [OAuth app](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app).
+   Set its homepage to that origin and its callback to
+   `https://obsidian-mcp.<account-subdomain>.workers.dev/oauth/github/callback`.
+   Copy the client ID and generate a client secret.
+3. Copy `apps/cloudflare-obsidian-mcp/wrangler.jsonc` to
+   `apps/cloudflare-obsidian-mcp/wrangler.deploy.jsonc`. Set these `vars`:
+
+   | Variable | Value |
+   | --- | --- |
+   | `GITHUB_CLIENT_ID` | Your OAuth app's client ID |
+   | `MCP_PUBLIC_BASE_URL` | The MCP origin above, without `/mcp` |
+   | `VAULT_DATABASE` | Your synced database name |
+   | `GITHUB_ALLOWED_USER_IDS` | Your numeric GitHub account ID, not username |
+   | `MCP_WRITES_ENABLED` | `false` for read-only access; `true` to allow writes |
+
+   To find your account ID in a browser, open
+   [the GitHub users API](https://api.github.com/users/YOUR_USERNAME), replacing
+   `YOUR_USERNAME` in the URL with your GitHub username. Check that `login`
+   matches your account and copy the number in `id` (not `node_id`).
+   If you renamed the sync Worker, update `POUCH_DATABASES.script_name` too.
+4. Copy `apps/cloudflare-obsidian-mcp/.dev.vars.example` to `.dev.vars` in that
+   same directory and set `GITHUB_CLIENT_SECRET`. From the repository root:
+
+   ```sh
+   npm run deploy:mcp -- --secrets-file apps/cloudflare-obsidian-mcp/.dev.vars
+   ```
+
+See [MCP deployment](DEPLOY.md#deploy-the-mcp-worker) for resource configuration
+and upgrades. `npm run deploy` deploys **both** Workers after both are configured.
+
+### 4. Add the MCP URL to your AI product
+
+Add a remote MCP server/custom connector with this URL:
+
+```text
+https://obsidian-mcp.<account-subdomain>.workers.dev/mcp
 ```
 
-Then use the same database name that LiveSync uses:
+Sign in with your allowed GitHub account and approve the requested vault access.
+You don't give the AI client your CouchDB password or GitHub client secret.
+Give the MCP connector a distinctive name—I use **Folio**. Try asking it to
+find and read a test note. With writes enabled, you can then ask “Please save
+a summary of this chat in Folio”, and sync Obsidian to see the new note.
 
-```ts
-const vault = env.POUCH_DATABASES.getByName("vault");
-await vault.ensureDatabase("vault");
+## Caveats
 
-const note = await vault.getDocument("vault", "notes/example.md");
-await vault.putDocument("vault", {
-  ...note,
-  data: "updated content"
-});
-```
+- **Use a test vault first.** Please don't move your active, important notes
+  here yet. Keep an independent backup—for example, copy a vault from one
+  device into a separate Dropbox or iCloud backup folder. A second live sync
+  system on the same working folder is not a substitute for a backup.
+- **MCP does not support encrypted vaults or obfuscated paths.** Sync-only use
+  is expected to carry client-encrypted data because the server replicates documents without
+  decrypting them, but encrypted client syncing has not been verified here.
+  Offline backup extraction also currently requires an unencrypted,
+  unobfuscated vault.
+- **Backups go to your Cloudflare R2 bucket.** Defaults retain 30 daily,
+  8 weekly, and 24 monthly recovery points. These are in the same account as
+  your server; keep a separate copy and test recovery. See
+  [Backup and recovery](docs/backup-recovery.md).
+- **Compatibility is focused on LiveSync.** Large vaults and unusual settings
+  need more real-world testing. See [Compatibility and limits](COMPATIBILITY.md)
+  for supported operations and size constraints.
 
-The public RPC surface currently includes `ensureDatabase`, `getDocument`,
-`putDocument`, and `allDocuments`. The Durable Object's `fetch()` method also
-exposes the complete implemented CouchDB surface when a caller needs replication
-or maintenance operations.
+## Built on LiveSync
 
-## Verification
+Most of the vault handling builds on
+[LiveSync Commonlib](https://github.com/vrtmrz/livesync-commonlib).
+Storage uses PouchDB with a
+[SQLite Durable Object adapter](https://github.com/robince/pouchdb-adapter-sqlite/tree/cloudflare-do-adapter/packages/pouchdb-adapter-cloudflare-do).
+This project brings that storage to Cloudflare and adds the separate MCP
+interface. Thanks to the upstream authors for making it possible.
 
-```sh
-npm run check
-npm test                 # published PouchDB 9 protocol suite
-npm run test:current-pouchdb
-npm run dry-run
-```
-
-The current-checkout suite expects `../pouchdb` to have dependencies installed
-and `npm run build-modules` completed. The adapter's own workerd tests live in
-`../pouchdb-adapter-sqlite/packages/pouchdb-adapter-cloudflare-do`.
+For implementation details, local development, and test commands, see
+[Development and architecture](docs/development.md).
