@@ -82,7 +82,7 @@ returning that winner. Listings flag affected paths with `unresolvedVersions`.
 Ordinary stale writes return `revision_conflict`: reread, reassess the intended
 change, and retry only if appropriate. No forced revision branch is created.
 After write authorization, existing conflicts may be reconciled using pinned
-Commonlib 0.1.19's `tryAutoMerge(path, true)`. A safe result is committed with
+Commonlib 0.1.23's `tryAutoMerge(path, true)`. A safe result is committed with
 ordinary revision CAS, followed by removal of only the observed losing leaf.
 Duplicate bytes use the pinned Obsidian host's duplicate-selection policy.
 Any progress returns `conflict_reconciled`; the triggering mutation is never
