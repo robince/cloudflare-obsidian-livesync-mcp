@@ -3,8 +3,7 @@
 Sync your Obsidian notes between devices, and optionally give your AI tools a
 shared place to read and save notes. This project lets you deploy your own
 Self-hosted LiveSync server on Cloudflare's free tier, with a separate cloud
-MCP server for access from compatible AI products. There is no computer or
-home server to keep running.
+MCP server for access from compatible AI products.
 
 There are two components, deployed to your own Cloudflare account:
 
@@ -24,10 +23,11 @@ and [R2 free tier](https://developers.cloudflare.com/r2/pricing/).
 
 ## How to use
 
-You need a **Cloudflare account**, a **GitHub account**, Git, and
+You need a **Cloudflare account**, Git, and
 Node.js **22.18.x–22.x or 24.11.0 and later**. Install
 [Self-hosted LiveSync](https://github.com/vrtmrz/obsidian-livesync) in Obsidian on
-each device. A **GitHub OAuth app** is needed only if you add MCP access.
+each device. A **GitHub account and OAuth app** are needed if you add MCP
+access; a GitHub account is also needed for the Deploy to Cloudflare button.
 
 ### 1. Deploy the sync server
 
@@ -124,6 +124,17 @@ of numeric account IDs. The interface exposes neither arbitrary database
 queries nor code execution. See the [MCP reference](apps/cloudflare-obsidian-mcp/README.md)
 for tools and limits.
 
+### Vault-specific AI instructions
+
+Add an optional `_AI_INSTRUCTIONS.md` note at the root of your vault to describe
+your folder layout, naming conventions, and templates. For example, specify
+where conversation summaries and daily notes belong, which timezone to use,
+and where to put attachments. Sync it like any other note.
+
+The MCP server instructs AI clients to read this note before writing. These
+conventions guide the AI; they are not enforced by the server, do not grant
+write access, and do not override your explicit requests.
+
 ### 3. Configure GitHub OAuth and deploy MCP
 
 1. Choose your MCP origin: `https://obsidian-mcp.<account-subdomain>.workers.dev`,
@@ -147,8 +158,7 @@ for tools and limits.
    To find your account ID in a browser, open
    [the GitHub users API](https://api.github.com/users/YOUR_USERNAME), replacing
    `YOUR_USERNAME` in the URL with your GitHub username. Check that `login`
-   matches your account and copy the number in `id` (not `node_id`). No CLI
-   installation or API token is needed.
+   matches your account and copy the number in `id` (not `node_id`).
    If you renamed the sync Worker, update `POUCH_DATABASES.script_name` too.
 4. Copy `apps/cloudflare-obsidian-mcp/.dev.vars.example` to `.dev.vars` in that
    same directory and set `GITHUB_CLIENT_SECRET`. From the repository root:
@@ -170,8 +180,9 @@ https://obsidian-mcp.<account-subdomain>.workers.dev/mcp
 
 Sign in with your allowed GitHub account and approve the requested vault access.
 You don't give the AI client your CouchDB password or GitHub client secret.
-Try asking it to find and read a test note; with writes enabled, ask it to save
-a short summary to a new note, then sync Obsidian to see it.
+Give the MCP connector a distinctive name—I use **Folio**. Try asking it to
+find and read a test note. With writes enabled, you can then ask “Please save
+a summary of this chat in Folio”, and sync Obsidian to see the new note.
 
 ## Caveats
 
