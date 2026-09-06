@@ -1,8 +1,9 @@
 # Residual issues
 
 This note records remaining limitations and dependency workarounds for the
-implemented sync and MCP servers. Compatibility evidence uses Self-hosted
-LiveSync 1.0.21 and Commonlib 0.1.19.
+implemented sync and MCP servers. The runtime pins Commonlib 0.1.23. Local
+compatibility checks cover that version; recorded real-client staging evidence
+uses Self-hosted LiveSync 1.0.21 and Commonlib 0.1.19.
 
 The Worker WASM initialization issue is resolved by the existing xxHash shim;
 see [Worker hashing compatibility](development.md#worker-hashing-compatibility).
@@ -47,8 +48,11 @@ The normal LiveSync plugin create flow begins with a host vault adapter and a
 filesystem event. A Worker has no vault filesystem, so it correctly uses
 `DirectFileManipulator` to write the LiveSync database directly.
 
-In the pinned Commonlib release, `putDBEntryWithLiveBaseRevision` adds
-`_rev: undefined` when no base revision is supplied, which PouchDB rejects. Its default `putDBEntry` rereads and then uses
+The pinned Commonlib release types `putDBEntryWithLiveBaseRevision`'s base as
+a required string. The facade currently passes `undefined` through a type
+assertion to request create-only semantics; upstream does not yet expose that
+as a supported typed operation. The writer adds `_rev: undefined` in this case,
+which PouchDB rejects. Its default `putDBEntry` rereads and then uses
 a forced put, which can overwrite a concurrent create. The install-time,
 version-checked patch makes the revision-aware function omit `_rev` only when
 the caller supplies no base revision. Commonlib still writes chunks and builds
@@ -56,8 +60,9 @@ the metadata document; the final ordinary PouchDB put supplies atomic
 create-only conflict behaviour.
 
 The patch intentionally fails installation if Commonlib is no longer exactly
-0.1.19 or its relevant source changes. This should become an upstream
-`putDBEntryIfAbsent` API and the local patch should then be removed.
+0.1.23 or its relevant source changes. Upstream should expose typed create-only
+semantics through the live-base writer or a dedicated `putDBEntryIfAbsent` API;
+the local patch can then be removed after validating a release containing the fix.
 
 ## Losing creates can leave unreferenced chunks
 

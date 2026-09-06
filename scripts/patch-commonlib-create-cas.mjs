@@ -5,7 +5,7 @@ const implementationPath = new URL(
   '../node_modules/@vrtmrz/livesync-commonlib/dist/managers/EntryManager/EntryManagerImpls.js',
   import.meta.url,
 );
-const expectedVersion = '0.1.19';
+const expectedVersion = '0.1.23';
 const original = `if (revisionTarget.mode !== "latest") {
         newDoc._rev = revisionTarget.baseRevision;
       }`;
