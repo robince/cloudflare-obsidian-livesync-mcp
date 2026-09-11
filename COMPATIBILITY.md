@@ -120,6 +120,16 @@ operators fail explicitly. `open_revs=all` and revision arrays are validated;
 `limit=0` means one, and negative/fractional/malformed limits return HTTP 400.
 The read-only adapter-table dependency is covered by replication regressions
 and must be reviewed when upgrading the pinned adapter.
+Sequence-only reads use `readUpdateSequence()` after the public `db.id()`
+readiness barrier, reading the adapter's persisted `sqlite_sequence` allocation
+high-water mark without a document recount. Database-info requests still use
+PouchDB for an accurate `doc_count`. Adapter upgrades must run
+`npx vitest run test/sequence-read.test.ts` (also included in `npm test`), checking
+sequence equivalence through initialization, writes, compaction, purge,
+backup/restore and eviction, plus fewer than 20 SQLite row reads for a complete
+empty long-poll with 1,000 documents. Review readiness and sequence storage
+semantics if the adapter changes; do not replace this source with surviving-row
+maxima or relax the performance guard to accommodate a document recount.
 
 The dangling-chunk view and `_purge` inspect all retained available revision
 bodies, including losing leaves, readable ancestors and deletion records.

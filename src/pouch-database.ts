@@ -2,7 +2,7 @@ import { diagnostic, operationFor } from './diagnostics';
 import { exportTables, importTables, verifyBackup, readManifest, directory, prune } from './backup/storage';
 import { fail, DATABASE_NAME, TABLES } from './backup/format';
 import type { GetVaultFileOutlineRequest, GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
-import { changesFeed, streamChanges, openRevisions, badRequest } from './changes-feed';
+import { changesFeed, streamChanges, openRevisions, badRequest, readUpdateSequence } from './changes-feed';
 import { chunkReferences } from './chunk-references';
 import { DurableObject } from 'cloudflare:workers';
 import cloudflareDOAdapter from '@robince/pouchdb-adapter-cloudflare-do';
@@ -547,7 +547,7 @@ export class PouchDatabase extends DurableObject<Env> {
     const body = request.method === 'POST' ? await readJson<ChangesRequest>(request) : {};
     const value = url.searchParams.get('since') ?? '0';
     if (value !== 'now' && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) throw badRequest('Invalid since sequence');
-    const since = value === 'now' ? Number((await db.info()).update_seq) : Number(value);
+    const since = value === 'now' ? await readUpdateSequence(db, this.ctx.storage.sql) : Number(value);
     let iterator = changesFeed(db, this.ctx.storage.sql, url, body, since, request.signal);
     let first = await iterator.next();
     if (url.searchParams.get('feed') === 'longpoll' && first.done) {

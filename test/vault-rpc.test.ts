@@ -86,7 +86,14 @@ describe('vault RPC', () => {
       rows: instance['ctx'].storage.sql
         .exec<{ count: number }>('SELECT COUNT(*) AS count FROM livesync_search_fts').one().count,
     }));
-    await expect(stub.searchVaultFiles({ query: 'MCP fixture', pathPrefix: 'notes/' })).resolves.toMatchObject({
+    const reused = await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const db = instance['database']();
+      const info = db.info;
+      db.info = (() => { throw new Error('Search must not recount documents for its sequence'); }) as typeof db.info;
+      try { return await instance.searchVaultFiles({ query: 'MCP fixture', pathPrefix: 'notes/' }); }
+      finally { db.info = info; }
+    });
+    expect(reused).toMatchObject({
       ok: true,
       data: { results: [expect.objectContaining({ path: 'notes/frontmatter.md' })] },
     });
