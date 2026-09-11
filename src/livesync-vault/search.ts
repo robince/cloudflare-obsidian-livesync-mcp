@@ -1,4 +1,5 @@
 import { diagnostic } from '../diagnostics';
+import { readUpdateSequence } from '../changes-feed';
 import { readFrontmatter } from './frontmatter';
 import { normalizeProperties, propertyPredicate } from './property-query';
 import { frontmatterFilterSchema } from '@cloudflare-obsidian-livesync/contracts';
@@ -67,7 +68,7 @@ export class LiveSyncSearch {
       const db = this.dependencies.database();
       const databaseId = await db.id();
       this.resetForDatabase(databaseId);
-      const target = sequence((await db.info()).update_seq);
+      const target = await readUpdateSequence(db, this.dependencies.storage.sql);
 
       let commonlib: CommonlibFacade | undefined;
       try {

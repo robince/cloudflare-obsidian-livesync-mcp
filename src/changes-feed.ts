@@ -27,12 +27,28 @@ export function openRevisions(url: URL): string[] | 'all' | undefined {
 }
 
 type FeedBody = { selector?: Record<string, unknown>; doc_ids?: string[] };
+type SequenceDatabase = PouchDB.Database<JsonObject> & { id(): Promise<string> };
+
+/** Pinned SQLite adapter 1.1.2-cloudflare-do.0 uses this allocation high-water
+ * mark, which survives compaction and purge. Do not replace it with MAX(seq)
+ * over retained revisions or db.info(), which also recounts every document. */
+export async function readUpdateSequence(db: SequenceDatabase, sql: SqlStorage): Promise<number> {
+  // Public id() waits for adapter initialization and reads its in-memory identity.
+  await db.id();
+  const rows = sql.exec<{ seq: number }>(
+    "SELECT seq FROM sqlite_sequence WHERE name='by-sequence'",
+  ).toArray();
+  if (rows.length > 1) throw new Error('Invalid database update sequence');
+  const seq = rows.length === 0 ? 0 : rows[0].seq;
+  if (!Number.isSafeInteger(seq) || seq < 0) throw new Error('Invalid database update sequence');
+  return seq;
+}
 
 /** Read-only access to the pinned SQLite adapter's sequence index provides keyset
  * paging in both directions; PouchDB still constructs all revision-tree results.
  * Its public descending changes API ignores since and cannot page backwards. */
 export async function* changesFeed(
-  db: PouchDB.Database<JsonObject>, sql: SqlStorage, url: URL,
+  db: SequenceDatabase, sql: SqlStorage, url: URL,
   body: FeedBody, since: number, signal: AbortSignal,
 ): AsyncGenerator<JsonObject, { last_seq: number; pending: number }> {
   if (body.selector !== undefined) validateSelector(body.selector);
@@ -43,7 +59,7 @@ export async function* changesFeed(
   const descending = booleanParam(url, 'descending') === true;
   const style = url.searchParams.get('style') ?? 'main_only';
   if (style !== 'main_only' && style !== 'all_docs') throw badRequest('Unsupported changes style');
-  const target = Number((await db.info()).update_seq);
+  const target = await readUpdateSequence(db, sql);
   let position = descending ? (since > 0 ? since : target + 1) : since;
   let last = since;
   let emitted = 0;

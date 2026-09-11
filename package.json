@@ -43,7 +43,7 @@
     "check": "npm run check:dependencies && npm run check:storage && npm run check --workspaces --if-present",
     "check:dependencies": "node --test test/production-dependencies.test.mjs && node scripts/check-production-dependencies.mjs",
     "check:storage": "tsc --noEmit",
-    "test": "npm run test:dependencies && vitest run test/worker.test.ts test/backup.test.ts test/diagnostic-stream.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts test/vault-conflicts.test.ts && vitest run test/mcp-storage-integration.test.ts",
+    "test": "npm run test:dependencies && vitest run test/sequence-read.test.ts test/worker.test.ts test/backup.test.ts test/diagnostic-stream.test.ts && vitest run test/commonlib-bridge.test.ts && vitest run test/vault-rpc.test.ts test/vault-conflicts.test.ts && vitest run test/mcp-storage-integration.test.ts",
     "test:dependencies": "node --test test/production-dependencies.test.mjs && node --experimental-strip-types --test test/backup-cli.test.mjs",
     "fixture:livesync": "node scripts/generate-livesync-fixture.mjs",
     "test:current-pouchdb": "vitest run test/current-pouchdb.test.ts",
