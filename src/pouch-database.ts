@@ -115,10 +115,14 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.meta('exists') === 'true';
   }
 
-  private database(name?: string): AnyDatabase {
+  private validateDatabaseIdentity(name?: string): void {
     if (name && this.dbName && name !== this.dbName) {
       throw Object.assign(new Error('database identity mismatch'), { status: 409, name: 'conflict' });
     }
+  }
+
+  private database(name?: string): AnyDatabase {
+    this.validateDatabaseIdentity(name);
     if (name && !this.dbName) {
       this.dbName = name;
       this.setMeta('db_name', name);
@@ -465,6 +469,9 @@ export class PouchDatabase extends DurableObject<Env> {
     }
     if (request.method === 'GET' || request.method === 'HEAD') {
       if (!this.exists()) return couchError(404, 'not_found', 'Database does not exist.');
+      this.validateDatabaseIdentity(name);
+      // Existence probes have no body; avoid info()'s full document recount.
+      if (request.method === 'HEAD') return new Response(null, { status: 200 });
       const info = await this.database(name).info();
       const size = this.ctx.storage.sql.databaseSize;
       const body: DatabaseInfo = {
@@ -478,7 +485,7 @@ export class PouchDatabase extends DurableObject<Env> {
         instance_start_time: '0',
         sizes: { file: size, external: size, active: size },
       };
-      return request.method === 'HEAD' ? new Response(null, { status: 200 }) : json(body);
+      return json(body);
     }
     if (request.method === 'POST') {
       this.requireExists();
