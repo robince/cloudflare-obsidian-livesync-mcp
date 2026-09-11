@@ -67,6 +67,15 @@ describe('persisted update sequence', () => {
       expect(instance['db']).toBeUndefined();
       expect(head.rowsRead).toBeLessThanOrEqual(2);
       expect(head.queries.every((query) => query.includes('cloudflare_pouchdb_meta'))).toBe(true);
+      const mismatch = await measure(sql, async () => {
+        const probe = request('/', { method: 'HEAD' });
+        probe.headers.set('x-pouchdb-database', 'another-vault');
+        const response = await instance.fetch(probe);
+        expect(response.status).toBe(409);
+      });
+      expect(instance['db']).toBeUndefined();
+      expect(mismatch.rowsRead).toBeLessThanOrEqual(2);
+      expect(mismatch.queries.every((query) => query.includes('cloudflare_pouchdb_meta'))).toBe(true);
       const get = await instance.fetch(request('/'));
       expect(get.status).toBe(200);
       expect(await get.json()).toMatchObject({ doc_count: 100, update_seq: 100 });
