@@ -46,6 +46,33 @@ async function equivalent(instance: PouchDatabase) {
 }
 
 describe('persisted update sequence', () => {
+  it('answers database HEAD probes without initializing PouchDB or scanning documents', async () => {
+    const stub = fresh();
+    expect((await stub.fetch(request('/', { method: 'HEAD' }))).status).toBe(404);
+    await stub.ensureDatabase('vault');
+    await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      await instance['database']().bulkDocs(
+        Array.from({ length: 100 }, (_, i) => ({ _id: `head-${i}` })),
+      );
+    });
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const sql = instance['ctx'].storage.sql;
+      expect(instance['db']).toBeUndefined();
+      const head = await measure(sql, async () => {
+        const response = await instance.fetch(request('/', { method: 'HEAD' }));
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe('');
+      });
+      expect(instance['db']).toBeUndefined();
+      expect(head.rowsRead).toBeLessThanOrEqual(2);
+      expect(head.queries.every((query) => query.includes('cloudflare_pouchdb_meta'))).toBe(true);
+      const get = await instance.fetch(request('/'));
+      expect(get.status).toBe(200);
+      expect(await get.json()).toMatchObject({ doc_count: 100, update_seq: 100 });
+    });
+  });
+
   it('waits for cold initialization and survives revision maintenance and object eviction', async () => {
     const stub = fresh();
     const last = await runInDurableObject(stub, async (instance: PouchDatabase) => {
