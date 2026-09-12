@@ -24,5 +24,8 @@ wrangler.deploy.jsonc
 *.log
 .DS_Store
 
+# Local documentation and investigation artifacts
+docs/untracked/
+
 # Temporary storage deployment configuration
 .wrangler-deploy-*.jsonc
