@@ -67,6 +67,7 @@ export async function verifyBackup(bucket: R2Bucket, m: Manifest): Promise<void>
   const actual = counts();
   for (let i = 0; i < m.parts.length; i++) for (const row of await readPart(bucket, m, i)) actual[row.table]++;
   checkCounts(actual, m.tables);
+  if (actual['metadata-store'] !== 1) fail('Backup requires exactly one metadata row');
 }
 export async function importTables(storage: DurableObjectStorage, bucket: R2Bucket, m: Manifest): Promise<void> {
   const sql = storage.sql;

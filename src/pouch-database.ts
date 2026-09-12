@@ -236,7 +236,9 @@ export class PouchDatabase extends DurableObject<Env> {
       this.setMeta('restore_state', 'failed');
       // Even a failure after reopening (for example, a missing milestone) must release handles.
       const db = this.db; this.db = undefined;
-      if (db) await db.close();
+      if (db) {
+        try { await db.close(); } catch { /* Preserve the original restore failure. */ }
+      }
       throw error;
     }
     finally { this.restoreActive = false; }

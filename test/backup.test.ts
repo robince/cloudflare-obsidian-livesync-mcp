@@ -3,7 +3,8 @@ import { runInDurableObject, evictDurableObject } from 'cloudflare:test';
 import { describe, it, expect } from 'vitest';
 import worker, { PouchDatabase } from '../src/index';
 import { listBackups, verifyBackup, directory } from '../src/backup/storage';
-import { pack, unpack, hash } from '../src/backup/format';
+import { expectCounts } from './backup-helpers';
+import { TABLES, pack, unpack, hash } from '../src/backup/format';
 import fixture from './fixtures/livesync-1.0.21.json';
 
 async function seed() {
@@ -17,20 +18,6 @@ async function seed() {
   return stub;
 }
 async function target() { return env.POUCH_DATABASES.getByName(`restore-${crypto.randomUUID()}`); }
-
-async function expectCounts(stub: Awaited<ReturnType<typeof target>>, name: string) {
-  const result = await runInDurableObject(stub, async (db: PouchDatabase) => {
-    const oracle = db['ctx'].storage.sql.exec<{ num: number }>(`SELECT COUNT(d.id) AS num
-      FROM "document-store" d JOIN "by-sequence" b ON b.seq = d.winningseq WHERE b.deleted = 0`).one().num;
-    const adapter = db['database'](name);
-    return { oracle, info: (await adapter.info()).doc_count, rows: (await adapter.allDocs()).total_rows,
-      meta: db['ctx'].storage.sql.exec('SELECT db_version, doc_count FROM "metadata-store"').one() };
-  });
-  expect(result.info).toBe(result.oracle);
-  expect(result.rows).toBe(result.oracle);
-  expect(result.meta).toEqual({ db_version: 2, doc_count: result.oracle });
-  return result.oracle;
-}
 
 describe('database backups', () => {
   it('round-trips retained revisions, chunks, metadata, tombstones and attachments into a locked fresh target', async () => {
@@ -269,6 +256,33 @@ describe('database backups', () => {
         sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
         sql.exec('UPDATE "metadata-store" SET db_version = 1');
       });
+      const sql = db['ctx'].storage.sql;
+      const schema = () => sql.exec('PRAGMA table_info("metadata-store")').toArray();
+      const rows = () => Object.fromEntries(Object.keys(TABLES).map(table => [table,
+        sql.exec(`SELECT * FROM "${table}" ORDER BY rowid`).toArray()]));
+      const originalSchema = schema(), originalRows = rows(), originalExec = sql.exec;
+      let injected = false;
+      sql.exec = ((query: string, ...bindings: SqlStorageValue[]) => {
+        const cursor = originalExec.call(sql, query, ...bindings);
+        if (query.includes('ADD COLUMN doc_count')) {
+          injected = true;
+          throw new Error('Injected failure after ADD COLUMN doc_count');
+        }
+        return cursor;
+      }) as SqlStorage['exec'];
+      const failed = db['database']('vault');
+      try {
+        // PouchDB normalizes adapter initialization errors; injection is asserted below.
+        await expect(failed.info()).rejects.toThrow();
+      } finally {
+        sql.exec = originalExec;
+        db['db'] = undefined;
+        await failed.close().catch(() => {});
+      }
+      expect(injected).toBe(true);
+      expect(schema()).toEqual(originalSchema);
+      expect(rows()).toEqual(originalRows);
+      expect(sql.exec('SELECT db_version FROM "metadata-store"').one().db_version).toBe(1);
       await db['database']('vault').info();
     });
     expect(await expectCounts(source, 'vault')).toBe(before);
@@ -286,11 +300,26 @@ describe('database backups', () => {
     if (!('id' in noMilestone)) throw new Error('Expected backup');
     const failed = await target();
     expect(await runInDurableObject(failed, async (db: PouchDatabase) => {
+      const database = db['database'];
+      let opens = 0, cleanupFailed = false;
+      db['database'] = (name?: string) => {
+        const adapter = database.call(db, name);
+        if (++opens === 2) {
+          const close = adapter.close.bind(adapter);
+          adapter.close = async () => {
+            await close();
+            cleanupFailed = true;
+            throw new Error('Injected close failure');
+          };
+        }
+        return adapter;
+      };
       try { await db.restoreBackup('no-milestone', 'vault', noMilestone.id); return false; }
       catch (error) {
         expect((error as Error).message).toContain('no LiveSync milestone');
+        expect(cleanupFailed).toBe(true);
         return db['db'] === undefined && db['meta']('restore_state') === 'failed';
-      }
+      } finally { db['database'] = database; }
     })).toBe(true);
     // Restore requires the LiveSync milestone, which is local and does not increase doc_count.
     await source.putDocument('vault', { _id: '_local/obsydian_livesync_milestone' });
@@ -320,6 +349,9 @@ describe('database backups', () => {
       changed.tables['metadata-store'] = rows.filter(row => row.table === 'metadata-store').length;
       await env.BACKUP_BUCKET.put(key, bytes);
       await env.BACKUP_BUCKET.put(dir + 'manifest.json', JSON.stringify(kind === 'legacy' ? { ...changed, format: 1 } : changed));
+      if (kind === 'missing' || kind === 'duplicate') {
+        await expect(verifyBackup(env.BACKUP_BUCKET, changed)).rejects.toThrow('exactly one metadata row');
+      }
       const restored = await target();
       const failure = await runInDurableObject(restored, async (db: PouchDatabase) => {
         try { await db.restoreBackup('invalid', 'vault', m.id); return ''; }

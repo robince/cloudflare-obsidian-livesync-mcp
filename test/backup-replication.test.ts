@@ -4,6 +4,7 @@ import { it, expect } from 'vitest';
 import PouchDB from 'pouchdb-core';
 import HttpPouch from 'pouchdb-adapter-http';
 import replication from 'pouchdb-replication';
+import { expectCounts } from './backup-helpers';
 import type { PouchDatabase } from '../src/index';
 
 const ReplicationClient = PouchDB.plugin(HttpPouch).plugin(replication);
@@ -16,20 +17,6 @@ async function seed() {
   await source.putDocument('vault', { _id: '_local/obsydian_livesync_milestone' });
   return source;
 }
-async function expectCounts(stub: Awaited<ReturnType<typeof target>>, name: string) {
-  const result = await runInDurableObject(stub, async (db: PouchDatabase) => {
-    const oracle = db['ctx'].storage.sql.exec<{ num: number }>(`SELECT COUNT(d.id) AS num
-      FROM "document-store" d JOIN "by-sequence" b ON b.seq = d.winningseq WHERE b.deleted = 0`).one().num;
-    const adapter = db['database'](name);
-    return { oracle, info: (await adapter.info()).doc_count, rows: (await adapter.allDocs()).total_rows,
-      meta: db['ctx'].storage.sql.exec('SELECT db_version, doc_count FROM "metadata-store"').one() };
-  });
-  expect(result.info).toBe(result.oracle);
-  expect(result.rows).toBe(result.oracle);
-  expect(result.meta).toEqual({ db_version: 2, doc_count: result.oracle });
-  return result.oracle;
-}
-
   it('replicates writes and deletions into a restored database with exact counts', async () => {
     const source = await seed(), m = await source.createBackup('vault');
     if (!('id' in m)) throw new Error('Expected backup');
