@@ -292,3 +292,11 @@ absent/invalid ID allowlist denies access, with no username fallback. Obtain and
 verify IDs with `gh api user --jq '{login, id}'` and the GitHub users API. See
 [contract 5 migration](apps/cloudflare-obsidian-mcp/README.md#upgrade-to-contract-5)
 for token compatibility and configuration examples.
+
+### SQLite schema-2 upgrade
+
+Before deploying the `1.1.2-cloudflare-do.1` adapter, follow the
+[pre-migration backup, rollout and recovery procedure](docs/backup-recovery.md#schema-2-rollout-and-recovery).
+Do not run an older Worker against migrated storage. Current backup tools accept
+only format 2; preserve the old application with its verified format-1 backup
+for recovery to schema 1.

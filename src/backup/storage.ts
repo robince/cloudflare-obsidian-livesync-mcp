@@ -27,8 +27,8 @@ export async function listBackups(bucket: R2Bucket, database: string): Promise<M
 }
 export async function exportTables(sql: SqlStorage, bucket: R2Bucket, database: string, check: () => void): Promise<Manifest> {
   const start = Date.now();
-  const m: Manifest = { format: 1, id: `${start}-${crypto.randomUUID()}`, database, createdAt: new Date(start).toISOString(),
-    adapter: '1.1.2-cloudflare-do.0', application: '0.1.0', tables: counts(), parts: [], bytes: 0, pauseMs: 0 };
+  const m: Manifest = { format: 2, id: `${start}-${crypto.randomUUID()}`, database, createdAt: new Date(start).toISOString(),
+    adapter: '1.1.2-cloudflare-do.1', application: '0.1.0', tables: counts(), parts: [], bytes: 0, pauseMs: 0 };
   let lines: string[] = [], rawBytes = 0;
   const flush = async () => {
     if (!lines.length) return;
@@ -99,8 +99,16 @@ export async function importTables(storage: DurableObjectStorage, bucket: R2Buck
   if (sequence.length > 1 || (sequence[0]?.seq ?? 0) < maximum) fail('Invalid sequence high-water mark');
   const orphanAttachments = sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM "attach-seq-store" r LEFT JOIN "attach-store" a ON a.digest=r.digest LEFT JOIN "by-sequence" b ON b.seq=r.seq WHERE a.digest IS NULL OR b.seq IS NULL').one().n;
   if (orphanAttachments) fail('Invalid attachment references');
-  const meta = sql.exec<{ db_version: number }>('SELECT db_version FROM "metadata-store"').toArray();
-  if (meta.length !== 1 || meta[0].db_version !== 1) fail('Unsupported adapter schema');
+  const meta = sql.exec<{ db_version: number; doc_count: number }>('SELECT db_version, doc_count FROM "metadata-store"').toArray();
+  if (meta.length !== 1) fail('Restore requires exactly one metadata row');
+  if (meta[0].db_version !== 2) fail('Unsupported adapter schema: expected schema 2');
+  if (!Number.isSafeInteger(meta[0].doc_count) || meta[0].doc_count < 0) fail('Invalid restored doc_count');
+  // Independent oracle, run once while adapter handles are closed and the target is gated.
+  const count = sql.exec<{ num: number }>(`SELECT COUNT(d.id) AS num
+    FROM "document-store" d
+    JOIN "by-sequence" b ON b.seq = d.winningseq
+    WHERE b.deleted = 0`).one().num;
+  if (count !== meta[0].doc_count) fail('Restored doc_count mismatch');
 }
 export async function prune(bucket: R2Bucket, database: string, policy: {daily: number; weekly: number; monthly: number}): Promise<void> {
   const backups = await listBackups(bucket, database);

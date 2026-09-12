@@ -171,12 +171,67 @@ separately from vault backups.
 
 ## Format and verification
 
-Format 1 targets the pinned SQLite adapter `1.1.2-cloudflare-do.0`. It stores
+Format 2 targets SQLite schema 2 and the pinned adapter `1.1.2-cloudflare-do.1`. It stores
 allowlisted table rows in gzip JSONL parts, at most 4 MiB uncompressed per part,
 with explicit binary encoding, per-part SHA-256 hashes, row counts, and source
 identity. Restore never executes SQL from an archive and rejects unsupported
-formats. Do not upgrade the adapter without keeping a tested reader for retained
-backups or documenting the required older restore version.
+formats. Metadata contains exactly one row with `dbid`, `db_version = 2`, and
+nonnegative JavaScript-safe-integer `doc_count`. Restore compares that count once
+with an independent join of document winners and undeleted revisions before
+reopening the adapter. A mismatch fails; it is never repaired or defaulted to zero.
+Normal `info()` and `allDocs()` use the adapter's persisted count.
+
+Format-1 archives are deliberately unsupported by this Worker and CLI, including
+verification and extraction. They lack the persisted count required by schema 2;
+conversion and legacy readers are out of scope. Remove existing format-1 archives before switching to format 2; listing and
+retention reject unsupported archives too. If retaining a pre-migration recovery
+copy, keep it separately with the saved old application/CLI. Existing schema-1 **databases** still migrate automatically on
+first open, with one transactional recount; this is separate from archive restore.
+
+Restore is exclusive: gate requests, drain pending mutations, close handles,
+create the target schema and close its bootstrap handle, import and validate,
+then reopen. Each imported part is transactional; the whole multipart import is
+not one transaction. Publication is atomic and failed/interrupted targets remain
+inaccessible (HTTP 503, rejected RPCs), including across object restarts, until an
+explicit `--restart` succeeds. Existing databases are never replaced.
+
+## Schema-2 rollout and recovery
+
+1. Before upgrading, suspend all LiveSync clients and MCP writes. Save the old
+   application revision, lockfile, deploy configuration and secrets securely.
+   With that old application's CLI, run `npm run backup -- create`, record the ID,
+   `npm run backup -- verify --id BACKUP_ID`, download it with
+   `npm run backup -- download --id BACKUP_ID --out /private/tmp/pre-schema2`,
+   and verify with `npm run backup -- verify --dir /private/tmp/pre-schema2`.
+   Preserve all parts outside retention and rehearse restore with the old Worker
+   into an unused database in an isolated schema-1 deployment. Verify readable
+   notes, attachments and conflicts. Keep any recovery R2 objects in the isolated old deployment, outside the
+   bucket used for format 2: the restore API cannot upload local archives.
+2. Review this change, run `npm ci`, `npm run types:check`, `npm run check`,
+   `npm run test:all`, and `npm run dry-run`. Rehearse the upgrade in staging.
+   The wrapper and aliased core are both pinned to `1.1.2-cloudflare-do.1` from
+   `robince/pouchdb-adapter-sqlite` commit
+   `4efe7f6f371dd335350f161709fc52386b9c84b9` on
+   `cloudflare-do-npm-prerelease`. It contains `b1310eb`, merged through `5ffa374`
+   and `64a8d13`. Both npm packages report that release commit as `gitHead`;
+   the lockfile records their registry tarballs and SHA-512 integrity.
+3. After separate deployment approval, replace the old Worker while clients stay
+   suspended. Do not split traffic between old and new builds against the same
+   Durable Objects. Open the database to trigger migration, check `info` and
+   `allDocs` counts and documents, create/download/verify a new format-2 backup,
+   and rehearse its restore into an unused target. Resume clients after a
+   successful two-device write/delete/sync round-trip.
+4. For normal recovery, use the new Worker and a format-2 backup with the fresh
+   target/reset procedure above. Failed imports require explicit restart; never
+   clear the restore gate manually.
+5. For recovery to the old application, keep clients suspended and use the saved
+   old Worker **plus its verified pre-migration format-1 backup** in an isolated
+   deployment with fresh Durable Objects (or the rehearsed compatible schema-1
+   target). Use the old CLI to restore, verify, then repoint clients and MCP and
+   follow the reset procedure above. This loses changes after that snapshot.
+   Redeploying the old Worker alone against migrated schema-2 storage is unsafe:
+   its writes would leave `doc_count` stale. Never point the old adapter at a
+   migrated database, even if it appears to open successfully.
 
 Run `npm run test:backup` for database round-trip, maintenance/failure handling,
 retention, and offline extraction checks. The full `npm test` includes these

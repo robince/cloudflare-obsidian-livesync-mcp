@@ -25,6 +25,7 @@ export async function verifyLocal(directory, onRows = () => {}) {
     await onRows(rows);
   }
   checkCounts(actual, m.tables);
+  if (actual['metadata-store'] !== 1) throw new Error('Backup requires exactly one metadata row');
   return m;
 }
 export function safePath(path) {
