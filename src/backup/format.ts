@@ -3,7 +3,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 
 // Versioned against the pinned SQLite adapter. Never execute schema from an archive.
 export const TABLES = {
-  'metadata-store': ['dbid', 'db_version'],
+  'metadata-store': ['dbid', 'db_version', 'doc_count'],
   'document-store': ['id', 'json', 'winningseq', 'max_seq'],
   'by-sequence': ['seq', 'json', 'deleted', 'doc_id', 'rev'],
   'attach-store': ['digest', 'escaped', 'body'],
@@ -20,8 +20,8 @@ export const MAX_PARTS = 4096;
 export const DATABASE_NAME = /^[a-z][a-z0-9_$()+-]*$/;
 export type Part = { file: string; bytes: number; rawBytes: number; rows: number; sha256: string };
 export type Manifest = {
-  format: 1; id: string; database: string; createdAt: string;
-  adapter: '1.1.2-cloudflare-do.0'; application: '0.1.0';
+  format: 2; id: string; database: string; createdAt: string;
+  adapter: '1.1.2-cloudflare-do.1'; application: '0.1.0';
   tables: Record<Table, number>; parts: Part[]; bytes: number; pauseMs: number;
 };
 export function fail(message: string, status = 400): never {
@@ -61,13 +61,21 @@ export function unpack(bytes: Uint8Array, part: Part): RecordRow[] {
     if (!row || !Object.hasOwn(TABLES, row.table) || !Array.isArray(row.values)
       || row.values.length !== TABLES[row.table].length) fail('Invalid backup table/row');
     row.values.forEach(decodeCell);
+    if (row.table === 'metadata-store') {
+      if (row.values[1] !== 2) fail('Unsupported adapter schema: expected schema 2');
+      const count = row.values[2];
+      if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) fail('Invalid restored doc_count');
+    }
     if (row.table === 'sqlite_sequence' && row.values[0] !== 'by-sequence') fail('Invalid sequence table');
     return row;
   });
 }
 export function manifestFrom(value: unknown): Manifest {
+  if (value && typeof value === 'object' && 'format' in value && value.format === 1) {
+    fail('Format-1 backups are unsupported. Use the old application and its compatible backup in an isolated schema-1 deployment; see docs/backup-recovery.md.');
+  }
   const m = value as Manifest;
-  if (!m || m.format !== 1 || m.adapter !== '1.1.2-cloudflare-do.0' || m.application !== '0.1.0'
+  if (!m || m.format !== 2 || m.adapter !== '1.1.2-cloudflare-do.1' || m.application !== '0.1.0'
     || typeof m.id !== 'string' || typeof m.database !== 'string' || !DATABASE_NAME.test(m.database)
     || typeof m.createdAt !== 'string' || !Number.isFinite(Date.parse(m.createdAt))
     || !Number.isSafeInteger(m.bytes) || m.bytes < 0 || !Number.isFinite(m.pauseMs) || m.pauseMs < 0

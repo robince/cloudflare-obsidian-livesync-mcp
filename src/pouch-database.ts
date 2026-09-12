@@ -232,7 +232,15 @@ export class PouchDatabase extends DurableObject<Env> {
         this.ctx.storage.sql.exec("DELETE FROM cloudflare_pouchdb_meta WHERE key='restore_state'");
       });
       return { ok: true, database: target, backup: id, requiresLiveSyncReset: true };
-    } catch (error) { this.setMeta('restore_state', 'failed'); throw error; }
+    } catch (error) {
+      this.setMeta('restore_state', 'failed');
+      // Even a failure after reopening (for example, a missing milestone) must release handles.
+      const db = this.db; this.db = undefined;
+      if (db) {
+        try { await db.close(); } catch { /* Preserve the original restore failure. */ }
+      }
+      throw error;
+    }
     finally { this.restoreActive = false; }
   }
 

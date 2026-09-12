@@ -29,7 +29,7 @@ export function openRevisions(url: URL): string[] | 'all' | undefined {
 type FeedBody = { selector?: Record<string, unknown>; doc_ids?: string[] };
 type SequenceDatabase = PouchDB.Database<JsonObject> & { id(): Promise<string> };
 
-/** Pinned SQLite adapter 1.1.2-cloudflare-do.0 uses this allocation high-water
+/** Pinned SQLite adapter 1.1.2-cloudflare-do.1 uses this allocation high-water
  * mark, which survives compaction and purge. Do not replace it with MAX(seq)
  * over retained revisions or db.info(), which also recounts every document. */
 export async function readUpdateSequence(db: SequenceDatabase, sql: SqlStorage): Promise<number> {

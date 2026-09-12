@@ -165,3 +165,17 @@ supports resumable reverse pages despite the pinned PouchDB API ignoring
 `since` in descending mode. On an exhausted page, `last_seq` retains the caller
 checkpoint. Empty notes support full reads and empty outlines, but have no
 valid inclusive line range; ranged reads return `invalid_input`.
+
+## SQLite schema 2 and backups
+
+The Cloudflare DO adapter and aliased SQLite core are pinned to
+`1.1.2-cloudflare-do.1` (source `4efe7f6f371dd335350f161709fc52386b9c84b9`).
+Existing schema-1 databases migrate on open with one transactional recount.
+Persisted `doc_count` counts live winners, including design documents and excluding
+`_local` documents; writes and purges maintain it transactionally.
+
+Only format-2 archives can be restored or read by the current backup CLI.
+Format-1 archives require the saved old application and a compatible schema-1
+recovery target. An old Worker alone is not a safe rollback after migration.
+See [rollout and recovery](docs/backup-recovery.md#schema-2-rollout-and-recovery)
+for pre-migration backup verification, cutover and recovery steps.

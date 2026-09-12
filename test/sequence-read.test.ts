@@ -89,7 +89,7 @@ describe('persisted update sequence', () => {
       // No ensureDatabase/info/id call has initialized the adapter yet.
       const cold = await measure(sql, () => readUpdateSequence(instance['database']('vault'), sql));
       expect(cold.value).toBe(0);
-      expect(cold.rowsRead).toBe(20);
+      expect(cold.rowsRead).toBe(18); // Schema 2 reads the persisted count during initialization.
       expect(cold.queries.some((query) => query.includes('CREATE TABLE'))).toBe(true);
       const db = instance['database']();
       expect(await equivalent(instance)).toBe(0);

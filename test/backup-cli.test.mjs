@@ -8,7 +8,7 @@ import { counts, pack, hash, retentionIds, unpack, manifestFrom } from '../src/b
 import { extract, verifyLocal, safePath } from '../scripts/backup.mjs';
 const { compressDoc } = await import(new URL('./compress.js', import.meta.resolve('@vrtmrz/livesync-commonlib/compat/pouchdb/LiveSyncLocalDB')));
 
-const m = date => ({ format: 1, id: `${Date.parse(date)}-${randomUUID()}`, database: 'vault', createdAt: new Date(date).toISOString(), adapter: '1.1.2-cloudflare-do.0', application: '0.1.0', tables: counts(), parts: [], bytes: 0, pauseMs: 1 });
+const m = date => ({ format: 2, id: `${Date.parse(date)}-${randomUUID()}`, database: 'vault', createdAt: new Date(date).toISOString(), adapter: '1.1.2-cloudflare-do.1', application: '0.1.0', tables: counts(), parts: [], bytes: 0, pauseMs: 1 });
 test('retention keeps latest representatives, overlaps once, and survives long gaps', () => {
   const backups = Array.from({ length: 1000 }, (_, i) => m(new Date(Date.UTC(2026, 8, 5 - i))));
   const keep = retentionIds(backups, { daily: 30, weekly: 8, monthly: 24 });
@@ -50,6 +50,7 @@ async function archive(directory, broken = false) {
     doc('collision', { path: 'INLINE.md', type: 'plain', children: [] });
   }
   rows.push({ table: 'local-store', values: ['_local/obsydian_livesync_milestone', '0-1', JSON.stringify({ tweak_values: { PREFERRED: { encrypt: false, usePathObfuscation: false } } })] });
+  rows.push({ table: 'metadata-store', values: ['fixture-db', 2, seq] });
   const manifest = m('2026-09-05');
   // Reversed archive insertion order must not change which colliding path is extracted.
   const lines = [...rows].reverse().map(row => JSON.stringify(row) + '\n');
@@ -94,7 +95,10 @@ test('verification rejects corrupted parts, forged counts and table names', asyn
   try {
     const { manifest } = await archive(dir);
     assert.throws(() => unpack(new Uint8Array([0]), manifest.parts[0]), /checksum/);
-    assert.throws(() => manifestFrom({ ...manifest, format: 2 }), /Unsupported/);
+    assert.throws(() => manifestFrom({ ...manifest, format: 3 }), /Unsupported/);
+    assert.throws(() => manifestFrom({ ...manifest, format: 1 }), /Format-1.*old application/);
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify({ ...manifest, format: 1 }));
+    await assert.rejects(verifyLocal(dir), /Format-1/);
     manifest.tables['by-sequence']++;
     await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
     await assert.rejects(verifyLocal(dir), /count mismatch/);
