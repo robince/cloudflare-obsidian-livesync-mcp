@@ -1,4 +1,4 @@
-import { vaultPathPolicySchema, type VaultPathPolicy, type VaultRpcRequest } from '@cloudflare-obsidian-livesync/contracts';
+import type { VaultPathPolicy, VaultRpcRequest } from '@cloudflare-obsidian-livesync/contracts';
 import { pathPolicyForEnv } from './path-policy';
 import type { GetVaultFileOutlineRequest, GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
 import type {
@@ -66,8 +66,9 @@ export type StorageVaultRpc = {
 };
 
 export function withVaultPathPolicy(rpc: StorageVaultRpc, policy: VaultPathPolicy): VaultRpc {
-  // Snapshot and validate once; callers cannot mutate policy while calls are in flight.
-  const pathPolicy = vaultPathPolicySchema.parse(policy);
+  // Configuration is already validated; storage independently validates the wire envelope.
+  // Snapshot so callers cannot mutate policy while calls are in flight.
+  const pathPolicy = structuredClone(policy);
   return {
     vaultStatus: () => rpc.vaultStatus(),
     listVaultFiles: (request) => rpc.listVaultFiles({ request, pathPolicy }),

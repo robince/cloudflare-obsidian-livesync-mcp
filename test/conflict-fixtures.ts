@@ -6,6 +6,7 @@ import type { JsonObject } from '../src/types';
 export async function conflictVault(options: {
   path?: string; base?: string; leaves?: string[]; deleted?: number;
   binary?: boolean; unrelated?: boolean; missingBase?: boolean; missingChunk?: number;
+  storedPaths?: string[];
 } = {}) {
   const name = `conflict-${crypto.randomUUID().replaceAll('-', '')}`;
   const stub = env.POUCH_DATABASES.getByName(name);
@@ -18,7 +19,7 @@ export async function conflictVault(options: {
   const path = options.path ?? 'notes/conflict.md';
   const texts = options.leaves ?? ['A\nbase\nend\n', 'start\nbase\nB\n'];
   const note = (content: string, rev: string, index: number): JsonObject => ({
-    _id: path, _rev: rev, path, type: options.binary ? 'newnote' : 'plain',
+    _id: path, _rev: rev, path: options.storedPaths?.[index] ?? path, type: options.binary ? 'newnote' : 'plain',
     datatype: options.binary ? 'newnote' : 'plain', ctime: 1000, mtime: (index + 2) * 1000,
     size: content.length, children: [`h:conflict-${index}`], eden: {},
     ...(options.deleted === index ? { deleted: true } : {}),

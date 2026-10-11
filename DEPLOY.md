@@ -234,7 +234,8 @@ Do not overwrite existing deployment files by copying the templates again.
 
 **Upgrading to semantic contract 6:** add `MCP_PATH_RULES` to every MCP environment
 in your existing ignored deployment copy before deploying. Set a JSON array of
-folder rules or explicitly the JSON string `"[]"` for unrestricted paths. Missing
+folder rules or explicitly the JSON string `"[]"` for no folder restrictions
+(MCP path validation still applies). Missing
 or invalid configuration disables MCP and logs the variable name to Worker logs;
 it does not affect Obsidian sync. `MCP_HIDE_DOT_FOLDERS="true"` is recommended for
 new installations; its default is false. See [folder access policy](apps/cloudflare-obsidian-mcp/README.md#folder-access-policy)

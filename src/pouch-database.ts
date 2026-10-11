@@ -366,7 +366,7 @@ export class PouchDatabase extends DurableObject<Env> {
         this.requireExists();
         return this.inspectCommonlibProfile();
       },
-      acquireCommonlib: (profile) => this.createCommonlib(profile),
+      acquireCommonlib: (profile, pathIdentityFailure) => this.createCommonlib(profile, pathIdentityFailure),
     }, pathPolicy);
   }
 
@@ -417,14 +417,15 @@ export class PouchDatabase extends DurableObject<Env> {
     }
   }
 
-  private async createCommonlib(profile: VaultProfileInspection): Promise<CommonlibFacade> {
+  private async createCommonlib(profile: VaultProfileInspection, pathIdentityFailure?: 'not_found' | 'access_denied'): Promise<CommonlibFacade> {
     this.requireExists();
     if (!this.dbName) throw new Error('database identity is required');
     const { CommonlibFacade } = await import('./livesync-vault/commonlib');
     return new CommonlibFacade(
       this.dbName,
       this.inProcessCouchFetch(),
-      profile
+      profile,
+      pathIdentityFailure,
     );
   }
 

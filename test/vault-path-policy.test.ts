@@ -1,12 +1,14 @@
 import { env } from 'cloudflare:workers';
 import { SELF, runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import PouchDB from 'pouchdb-core';
-import { vaultPathPolicySchema, type VaultResult } from '@cloudflare-obsidian-livesync/contracts';
+import { pathAccess, vaultPathPolicySchema, type VaultResult } from '@cloudflare-obsidian-livesync/contracts';
 import { withVaultPathPolicy } from '../apps/cloudflare-obsidian-mcp/src/vault-rpc';
 import { createVaultMcpServer, VAULT_TOOL_NAMES } from '../apps/cloudflare-obsidian-mcp/src/vault-tools';
 import type { PouchDatabase } from '../src/pouch-database';
+import { CommonlibFacade } from '../src/livesync-vault/commonlib';
+import { LiveSyncVault } from '../src/livesync-vault/vault';
 import type { JsonObject } from '../src/types';
 import fixture from './fixtures/livesync-1.0.21.json';
 import { conflictVault } from './conflict-fixtures';
@@ -100,6 +102,64 @@ describe('semantic path access', () => {
       expect(await rpc.deleteVaultFile({ path, expectedRevision: '2-b' })).toEqual(denied);
       if (path.startsWith('Private/')) expect(await rpc.readVaultFile({ path })).toEqual(missing);
       expect(await tree()).toEqual(before);
+    }
+  });
+
+  it.each([true, false])('blocks Unicode case aliases across every operation, case-sensitive vault=%s', async (caseSensitive) => {
+    const { name, stub, open } = await seeded(caseSensitive);
+    const hidden = ['ΟΔΟΣ/a.md', 'ΟΔΟσ/a.md', 'Straße/a.md', 'STRASSE/a.md'];
+    const readable = ['Μ/a.md', 'µ/a.md'];
+    for (const path of [...hidden, ...readable]) await note(open, path);
+    const restricted = withVaultPathPolicy(stub, vaultPathPolicySchema.parse({ rules: [
+      { path: 'ΟΔΟΣ', access: 'none' }, { path: 'Straße', access: 'none' }, { path: 'Μ', access: 'read' },
+    ], hideDotFolders: false }));
+    for (const path of hidden) {
+      expect(await restricted.readVaultFile({ path })).toEqual(missing);
+      expect(await restricted.readVaultFrontmatter({ path })).toEqual(missing);
+      expect(await restricted.getVaultFileOutline({ path })).toEqual(missing);
+    }
+    for (const path of [...hidden, ...readable, 'οδοσ/new.md', 'STRASSE/new.md', 'μ/new.md']) {
+      expect(await restricted.createVaultFile({ path, content: 'x' })).toEqual(denied);
+      expect(await restricted.updateVaultFile({ path, content: 'x', expectedRevision: '1-stale' })).toEqual(denied);
+      expect(await restricted.appendVaultFile({ path, content: 'x', expectedRevision: '1-stale' })).toEqual(denied);
+      expect(await restricted.patchVaultFile({ path, oldText: 'Heading', newText: 'x', expectedRevision: '1-stale' })).toEqual(denied);
+      expect(await restricted.patchVaultFrontmatter({ path, updates: { status: 'x' }, expectedRevision: '1-stale' })).toEqual(denied);
+      expect(await restricted.deleteVaultFile({ path, expectedRevision: '1-stale' })).toEqual(denied);
+    }
+    expect(data(await restricted.listVaultFiles({})).files.map((file) => file.path).sort()).toEqual(readable.sort());
+    expect(data(await restricted.searchVaultFiles({ query: 'policymarker' })).results.map((file) => file.path).sort()).toEqual(readable.sort());
+    const before = await stub.allDocuments(name, { include_docs: true });
+    await runInDurableObject(stub, (instance: PouchDatabase) => {
+      instance['ctx'].storage.sql.exec("UPDATE livesync_search_meta SET value='4' WHERE key='schema_version'");
+      // Simulate the old lowercase-only key: it would miss the new sigma rule.
+      instance['ctx'].storage.sql.exec("UPDATE livesync_search_documents SET policy_path='οδος/a.md' WHERE path='ΟΔΟΣ/a.md'");
+    });
+    expect(data(await restricted.searchVaultFiles({ query: 'policymarker' })).results.map((file) => file.path).sort()).toEqual(readable.sort());
+    expect(await stub.allDocuments(name, { include_docs: true })).toEqual(before);
+  });
+
+  it('keeps SQL search visibility equal to direct policy decisions, including empty rules', async () => {
+    const { stub, name } = await seeded();
+    await stub.putDocument(name, { _id: 'h:parity', type: 'leaf', data: 'policymarker' });
+    const paths = ['ΟΔΟΣ/a.md', 'ΟΔΟσ/a.md', 'Straße/a.md', 'STRASSE/a.md', 'Private/a.md', 'Private notes/a.md',
+      'a/.hidden/a.md', '.root.md', '100%_private/a.md', "quote'/a.md", '.../a.md', ' /a.md', 'notes/_Local/a.md',
+      'Café/a.md', 'Cafe\u0301/a.md', 'Journal/a.md'];
+    for (const path of paths) {
+      await stub.putDocument(name, { _id: path, path, type: 'plain', datatype: 'plain', children: ['h:parity'],
+        size: 12, ctime: 1, mtime: 1, eden: {} });
+    }
+    for (const candidate of [unrestrictedPolicy, policy, vaultPathPolicySchema.parse({ rules: [
+      { path: 'ΟΔΟΣ', access: 'none' }, { path: 'Straße', access: 'none' },
+      { path: "quote'", access: 'none' }, { path: 'Private', access: 'read' },
+    ], hideDotFolders: true })]) {
+      const rpc = withVaultPathPolicy(stub, candidate);
+      const expected = paths.filter((path) => pathAccess(candidate, path) !== 'none').sort();
+      expect(data(await rpc.listVaultFiles({})).files.map((file) => file.path).sort()).toEqual(expected);
+      expect(data(await rpc.searchVaultFiles({ query: 'policymarker' })).results.map((file) => file.path).sort()).toEqual(expected);
+    }
+    const open = withVaultPathPolicy(stub, unrestrictedPolicy);
+    for (const path of ['.../a.md', ' /a.md', 'notes/_Local/a.md']) {
+      expect(await open.readVaultFile({ path })).toMatchObject({ ok: false, error: { code: 'invalid_input' } });
     }
   });
 
@@ -222,8 +282,39 @@ describe('semantic path access', () => {
     await stub.putDocument(name, { ...original, path: 'Private/a.md' });
     const before = await stub.getDocument(name, 'A/a.md') as JsonObject;
     expect(await restricted.readVaultFile({ path: 'A/a.md' })).toEqual(missing);
+    expect(await restricted.readVaultFrontmatter({ path: 'A/a.md' })).toEqual(missing);
+    expect(await restricted.getVaultFileOutline({ path: 'A/a.md' })).toEqual(missing);
+    expect(await restricted.createVaultFile({ path: 'A/a.md', content: 'x' })).toEqual(denied);
+    expect(await restricted.updateVaultFile({ path: 'A/a.md', expectedRevision: '1-stale', content: 'x' })).toEqual(denied);
+    expect(await restricted.patchVaultFile({ path: 'A/a.md', expectedRevision: '1-stale', oldText: 'Heading', newText: 'x' })).toEqual(denied);
+    expect(await restricted.patchVaultFrontmatter({ path: 'A/a.md', expectedRevision: '1-stale', updates: { status: 'x' } })).toEqual(denied);
+    expect(await restricted.deleteVaultFile({ path: 'A/a.md', expectedRevision: '1-stale' })).toEqual(denied);
     expect(await restricted.appendVaultFile({ path: 'A/a.md', expectedRevision: before._rev as string, content: 'changed' })).toEqual(denied);
     expect(await stub.getDocument(name, 'A/a.md')).toEqual(before);
+  });
+
+  it('checks losing conflict revisions before merging and preserves fixed write denials', async () => {
+    const { stub, path, tree } = await conflictVault({ storedPaths: ['Private/secret.md', 'notes/conflict.md'] });
+    const before = await tree();
+    const rpc = withVaultPathPolicy(stub, policy);
+    expect(await rpc.appendVaultFile({ path, expectedRevision: '2-b', content: 'changed' })).toEqual(denied);
+    expect(await tree()).toEqual(before);
+  });
+
+  it('checks identity within each existing metadata read without an extra fetch', async () => {
+    const { name, stub, open } = await seeded();
+    await note(open, 'A/a.md');
+    await runInDurableObject(stub, async (instance: PouchDatabase) => {
+      const profile = await instance['inspectCommonlibProfile']();
+      const facade = new CommonlibFacade(name, instance['inProcessCouchFetch'](), profile, 'not_found');
+      await facade.ready();
+      const spy = vi.spyOn(facade['manipulator'].liveSyncLocalDB, 'getRaw');
+      try {
+        const vault = new LiveSyncVault({ profile: async () => profile, acquireCommonlib: async () => facade }, policy);
+        expect(data(await vault.read({ path: 'A/a.md' })).content).toContain('policymarker');
+        expect(spy.mock.calls.filter(([id]) => id === 'A/a.md')).toHaveLength(2);
+      } finally { spy.mockRestore(); await facade.close(); }
+    });
   });
 
   it('leaves standard CouchDB writes and replication of restricted files unchanged', async () => {

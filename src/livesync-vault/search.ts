@@ -1,4 +1,4 @@
-import { pathAccess, policyPathKey, type VaultPathPolicy } from '@cloudflare-obsidian-livesync/contracts';
+import { pathAccess, policyPathKey, policyKeyHasDotFolder, type VaultPathPolicy } from '@cloudflare-obsidian-livesync/contracts';
 import { diagnostic } from '../diagnostics';
 import { readUpdateSequence } from '../changes-feed';
 import { readFrontmatter } from './frontmatter';
@@ -17,7 +17,7 @@ import type { JsonObject } from '../types';
 import type { CommonlibFacade } from './commonlib';
 import type { VaultProfileInspection } from './profile';
 
-const SEARCH_SCHEMA_VERSION = '4';
+const SEARCH_SCHEMA_VERSION = '5';
 const SEARCH_CATCHUP_MS = 3_000;
 const SEARCH_CHANGES_PAGE = 100;
 
@@ -413,6 +413,8 @@ export class LiveSyncSearch {
     status: 'indexed' | 'excluded',
     reason?: string,
   ): number {
+    const policyKey = policyPathKey(path);
+    const dotFolder = Number(policyKey !== undefined && policyKeyHasDotFolder(policyKey));
     const existing = this.dependencies.storage.sql
       .exec<{ fts_rowid: number }>('SELECT fts_rowid FROM livesync_search_documents WHERE doc_id=?', documentId)
       .toArray()[0];
@@ -423,8 +425,8 @@ export class LiveSyncSearch {
           WHERE doc_id=?`,
         path,
         path.toLowerCase(),
-        policyPathKey(path) ?? null,
-        hasDotFolder(path),
+        policyKey ?? null,
+        dotFolder,
         revision,
         unresolvedVersions,
         status,
@@ -440,8 +442,8 @@ export class LiveSyncSearch {
       documentId,
       path,
       path.toLowerCase(),
-      policyPathKey(path) ?? null,
-      hasDotFolder(path),
+      policyKey ?? null,
+      dotFolder,
       revision,
       unresolvedVersions,
       status,
@@ -536,7 +538,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Literal prefix predicates: %, _ and quotes in folder names are never SQL patterns. */
+/** SQL equivalent of pathAccess !== 'none', applied before LIMIT/OFFSET.
+ * Keep in parity with the integration matrix in vault-path-policy.test.ts.
+ * Literal prefix predicates: %, _ and quotes are never SQL patterns.
+ */
 function visibilityPredicate(policy: VaultPathPolicy): { sql: string; bindings: string[] } {
   const predicates = ['d.policy_path IS NOT NULL'];
   const bindings: string[] = [];
@@ -547,8 +552,4 @@ function visibilityPredicate(policy: VaultPathPolicy): { sql: string; bindings: 
     bindings.push(rule.path);
   }
   return { sql: predicates.join(' AND '), bindings };
-}
-
-function hasDotFolder(path: string): number {
-  return Number(policyPathKey(path)?.split('/').slice(0, -1).some((segment) => segment.startsWith('.')) ?? false);
 }

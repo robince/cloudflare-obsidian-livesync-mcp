@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { unicodeCaseFold } from './unicode-case-fold';
 
 export const PATH_POLICY_LIMITS = { maxRules: 64, maxPathLength: 1024, maxConfigBytes: 128 * 1024 } as const;
 
@@ -8,7 +9,7 @@ export function policyPathKey(path: string): string | undefined {
   const segments = path.split('/');
   if (segments.some((segment) => !segment || segment === '.' || segment === '..'
     || segment === '_local' || segment === '_design')) return undefined;
-  const keys = segments.map((segment) => segment.normalize('NFC').toLowerCase().normalize('NFC').replace(/[ .]+$/u, ''));
+  const keys = segments.map((segment) => unicodeCaseFold(segment.normalize('NFD')).normalize('NFC').replace(/[ .]+$/u, ''));
   return keys.every((key) => key && key !== '_local' && key !== '_design') ? keys.join('/') : undefined;
 }
 
@@ -56,10 +57,15 @@ export function parseVaultRpcRequest<T>(value: VaultRpcRequest<T>) {
   return { ok: true as const, data: { request: value.request, pathPolicy: parsed.data.pathPolicy } };
 }
 
+/** Takes a comparison key, not an original vault path. Root dot-files are allowed. */
+export function policyKeyHasDotFolder(key: string): boolean {
+  return key.split('/').slice(0, -1).some((segment) => segment.startsWith('.'));
+}
+
 export function pathAccess(policy: VaultPathPolicy, path: string): 'none' | 'read' | 'write' {
   const key = policyPathKey(path);
   if (!key) return 'none';
-  if (policy.hideDotFolders && key.split('/').slice(0, -1).some((segment) => segment.startsWith('.'))) return 'none';
+  if (policy.hideDotFolders && policyKeyHasDotFolder(key)) return 'none';
   let access: 'read' | 'write' = 'write';
   for (const rule of policy.rules) {
     if (!key.startsWith(rule.path)) continue;

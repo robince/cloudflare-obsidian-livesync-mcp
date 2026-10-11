@@ -48,6 +48,7 @@ type VaultDependencies = {
   profile: () => Promise<VaultProfileInspection>;
   acquireCommonlib: (
     profile: Extract<VaultProfileInspection, { supported: true }>,
+    pathIdentityFailure: 'not_found' | 'access_denied',
   ) => Promise<CommonlibFacade>;
 };
 
@@ -104,9 +105,9 @@ export class LiveSyncVault {
       let examined = 0;
       let lastId: string | undefined;
       for await (const file of commonlib.enumerate()) {
+        if (cursor && file.id <= cursor.id) continue;
         if (!isListed(file, prefix, profile.handleFilenameCaseSensitive)) continue;
         if (pathAccess(this.pathPolicy, file.path) === 'none') continue;
-        if (cursor && file.id <= cursor.id) continue;
         if (page.length === limit || examined === VAULT_LIMITS.maxListLimit) {
           extra = true;
           break;
@@ -372,27 +373,19 @@ export class LiveSyncVault {
     const access = pathAccess(this.pathPolicy, path);
     if (write && access !== 'write') return failure('access_denied', 'This path is not writable via MCP');
     if (access === 'none') return failure('not_found', 'File not found.');
-    return this.withCommonlib(async (commonlib) => {
-      // Defensive identity assertion, before conflicts, content, or reconciliation.
-      if (!await commonlib.hasMatchingPathKey(path)) {
-        console.error({ event: 'vault_path_identity_mismatch' });
-        return write
-          ? failure('access_denied', 'This path is not writable via MCP')
-          : failure('not_found', 'File not found.');
-      }
-      return operation(commonlib);
-    });
+    return this.withCommonlib(operation, write ? 'access_denied' : 'not_found');
   }
 
   private async withCommonlib<T>(
-    operation: (commonlib: CommonlibFacade, profile: Extract<VaultProfileInspection, { supported: true }>) => Promise<VaultResult<T>>
+    operation: (commonlib: CommonlibFacade, profile: Extract<VaultProfileInspection, { supported: true }>) => Promise<VaultResult<T>>,
+    pathIdentityFailure: 'not_found' | 'access_denied' = 'not_found',
   ): Promise<VaultResult<T>> {
     try {
       const profile = await this.dependencies.profile();
       if (!profile.supported) {
         return failure('unsupported', `Unsupported LiveSync vault (${profile.reasons.join(', ')}).`);
       }
-      const commonlib = await this.dependencies.acquireCommonlib(profile);
+      const commonlib = await this.dependencies.acquireCommonlib(profile, pathIdentityFailure);
       try {
         return await operation(commonlib, profile);
       } finally {

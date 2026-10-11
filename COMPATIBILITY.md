@@ -192,7 +192,7 @@ paths and document IDs. The most restrictive matching rule wins.
 Hidden reads return `not_found`; denied writes use the same `access_denied`
 response regardless of existence. Enforcement precedes conflict reconciliation.
 Search visibility predicates run before pagination and also scope coverage
-counts. The derived search schema advances from 3 to 4 and rebuilds only index
+counts. The derived search schema advances from 3/4 to 5 and rebuilds only index
 tables. Search fingerprints include policy; list cursors advance to version 2
 with file/attachment kind binding and retain best-effort document-ID traversal.
 

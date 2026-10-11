@@ -72,7 +72,7 @@ the deployment copy's `vars`:
   value disables them; the committed template defaults to `false`.
 
 - `MCP_PATH_RULES` — required JSON array or JSON-encoded string of folder rules.
-  Use `"[]"` explicitly for unrestricted paths. Missing or invalid configuration
+  Use `"[]"` explicitly for no folder restrictions. Missing or invalid configuration
   disables MCP; it does not affect Obsidian sync.
 - `MCP_HIDE_DOT_FOLDERS` — `"true"` hides any dot-folder subtree, including nested
   `.obsidian/` folders. Omitted or `"false"` leaves them governed by path rules.
@@ -172,14 +172,19 @@ identical; neither matches `Private notes/`. Configuration accepts leading `/`
 and `./`; tool requests remain strictly vault-relative. Traversal (`..`),
 backslashes and invalid/empty segments are rejected.
 
-Policy matching always ignores case, even for case-sensitive vaults, normalizes
-Unicode to NFC, and trims trailing ASCII dots/spaces from each segment for
+Policy matching uses Unicode 17.0 full default case folding, even for
+case-sensitive vaults, normalizes Unicode to NFC, and trims trailing ASCII dots/spaces from each segment for
 comparison. Thus `private/`, `Private./` and `Private /` receive the restrictions
 of `Private/`, preventing these aliases from bypassing rules when synchronized
 to clients with different filesystem conventions. A segment that normalizes to
 empty is rejected. Stored paths, document IDs, ordinary file resolution and query
 prefix matching retain their existing behavior. Unrestricted `v1./` and
 `Draft /` folders remain writable. This does not emulate every filesystem alias.
+Case-folded equivalents such as `ΟΔΟΣ/` and `ΟΔΟσ/`, or `Straße/` and `STRASSE/`,
+share restrictions even when stored separately. Even with `[]`, MCP rejects
+segments that normalize to empty (such as `...` or a space) or to reserved
+`_local`/`_design` names (including `_Local`); affected files are omitted from
+list/search and direct operations return `invalid_input`. Raw sync is unchanged.
 
 Hidden files are filtered before pagination, including snippets, selected
 properties, attachment metadata and search coverage counts. Listing a hidden

@@ -57,6 +57,25 @@ describe('MCP path policy configuration', () => {
     for (const path of ['/a.md', './a.md', '../a.md', 'a/.. /x.md']) expect(policyPathKey(path)).toBeUndefined();
   });
 
+  it('folds Unicode case variants, expansions and canonical equivalents consistently', () => {
+    for (const variants of [
+      ['ΟΔΟΣ', 'οδος', 'οδοσ', 'ΟΔΟσ'], ['Straße', 'STRASSE', 'STRAẞE'],
+      ['ﬀ', 'FF'], ['ſ', 'S'], ['µ', 'Μ', 'μ'], ['Ꭰ', 'ꭰ'],
+      ['İ', 'I\u0307', 'i\u0307'], ['ᾼ', 'ΑΙ', 'α\u0345'],
+    ]) {
+      const key = policyPathKey(`${variants[0]}/note.md`);
+      for (const rule of variants) {
+        const policy = pathPolicyForEnv({ MCP_PATH_RULES: [{ path: rule, access: 'none' }] });
+        expect(vaultPathPolicySchema.parse(policy)).toEqual(policy);
+        for (const path of variants) {
+          expect(policyPathKey(`${path}/note.md`)).toBe(key);
+          expect(policyPathKey(`${path.normalize('NFD')}/note.md`)).toBe(key);
+          expect(pathAccess(policy, `${path}/note.md`)).toBe('none');
+        }
+      }
+    }
+  });
+
   it('hides dot-folders at any depth but not dot-files, and cannot reopen them', () => {
     const policy = pathPolicyForEnv({ MCP_PATH_RULES: [{ path: '.obsidian/', access: 'read' }], MCP_HIDE_DOT_FOLDERS: 'true' });
     for (const path of ['.obsidian/config.json', 'a/.private/secret.md']) expect(pathAccess(policy, path)).toBe('none');

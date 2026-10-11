@@ -66,7 +66,7 @@ values that differ between development and production configurations.
 ### Configuration defaults and validation
 
 Require an explicit `MCP_PATH_RULES` value for MCP operation. `[]` deliberately
-preserves unrestricted path access; missing or malformed configuration fails
+adds no folder restrictions (MCP path validation still applies); missing or malformed configuration fails
 closed with a generic client-facing configuration error. Log an operator-facing
 configuration diagnostic naming `MCP_PATH_RULES` (or `MCP_HIDE_DOT_FOLDERS` for
 that setting), without logging its value or folder names. Emit this when
@@ -101,8 +101,8 @@ and search-index key generation.
    `Private` and `Private/` as the same folder rule. Reject an empty/root rule
    after cleanup. Keep tool requests strictly vault-relative as they are today;
    `/Private/a.md` and `./Private/a.md` remain invalid inputs.
-3. Normalize comparison keys to Unicode NFC, lowercase them consistently, and
-   normalize the result again. Policy comparisons are always case-insensitive,
+3. Canonically decompose comparison keys, apply Unicode 17.0 full default case
+   folding, and normalize the result to NFC. Policy comparisons are always case-insensitive,
    regardless of the vault profile. Thus `Private/` also restricts `private/` in
    a case-sensitive vault. This prevents case-variant writes from evading rules
    before syncing to clients with case-insensitive filesystems. Keep ordinary
@@ -130,6 +130,8 @@ lookup. After resolving an existing file, defensively assert that its stored
 path has the same comparison key. Under normal resolution this assertion should
 never fail, since case and Unicode variants already compare equally. It is an
 invariant check, not a second existence-dependent policy decision.
+Run it inside the existing metadata fetch, including conflict leaf/ancestor
+reads, before returning that document to the caller; do not add a separate lookup.
 
 If the assertion fails, stop before content disclosure or mutation, log a generic
 operator diagnostic without paths, and return the same fixed denial used for
@@ -186,7 +188,7 @@ Primary locations:
 
 - `src/pouch-database.ts`
 - `src/livesync-vault/vault.ts`
-- `src/livesync-vault/commonlib.ts`, only if a side-effect-free metadata helper is needed
+- `src/livesync-vault/commonlib.ts`, shared checked metadata fetch
 
 Validate policy envelopes at semantic RPC entry points and pass policy as
 request-local context into vault operations. Do not store it as a vault-wide
@@ -356,7 +358,7 @@ leave documents untouched, and the standard sync/backup regression suites pass.
 
 Implemented policy-bearing semantic RPC envelopes (contract 6), shared normalized
 folder rules, server-side read/write enforcement, policy-filtered listing/search,
-search schema 4, deployment configuration and operational documentation. Normal
+search schema 5, deployment configuration and operational documentation. Normal
 CouchDB protocol entry points and backup/restore behavior were left unchanged.
 
 Added configuration/matcher unit tests and workerd integration tests covering all
