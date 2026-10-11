@@ -32,6 +32,8 @@ if (process.argv[2] === '--origin') {
   mcp.vars.GITHUB_CLIENT_ID = '';
   mcp.vars.GITHUB_ALLOWED_USER_IDS = '';
   mcp.vars.MCP_WRITES_ENABLED = 'false';
+  mcp.vars.MCP_PATH_RULES = [];
+  mcp.vars.MCP_HIDE_DOT_FOLDERS = 'false';
   mcp.observability = { enabled: false };
   for (const [name, config] of [['storage', storage], ['mcp', mcp]]) {
     delete config.$schema;

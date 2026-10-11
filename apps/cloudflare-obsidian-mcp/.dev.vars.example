@@ -1,1 +1,3 @@
 GITHUB_CLIENT_SECRET=replace-with-your-github-oauth-client-secret
+# Configure MCP_PATH_RULES and MCP_HIDE_DOT_FOLDERS in Wrangler vars.
+# Keep this deployment secrets file limited to GITHUB_CLIENT_SECRET.

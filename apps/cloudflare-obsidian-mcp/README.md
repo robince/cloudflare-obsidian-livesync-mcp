@@ -47,7 +47,7 @@ attachment listings include `unresolvedVersions` when multiple live versions
 exist. Automatic reconciliation runs only behind write authorization and the
 write kill switch. Binary conflicts are left to Obsidian's own policy.
 
-The semantic contract is version 5; deploy storage before the matching MCP
+The semantic contract is version 6; deploy storage before the matching MCP
 Worker. This does not change the CouchDB replication protocol.
 
 ## Deployment configuration
@@ -70,6 +70,13 @@ the deployment copy's `vars`:
   allowlist. An absent, empty, or invalid value allows nobody; usernames never authorize access.
 - `MCP_WRITES_ENABLED` — exact string `true` enables write tools. Every other
   value disables them; the committed template defaults to `false`.
+
+- `MCP_PATH_RULES` — required JSON array or JSON-encoded string of folder rules.
+  Use `"[]"` explicitly for unrestricted paths. Missing or invalid configuration
+  disables MCP; it does not affect Obsidian sync.
+- `MCP_HIDE_DOT_FOLDERS` — `"true"` hides any dot-folder subtree, including nested
+  `.obsidian/` folders. Omitted or `"false"` leaves them governed by path rules.
+  Other values are invalid. Enabling it is recommended for new deployments.
 
 `GITHUB_CLIENT_SECRET` is the only MCP secret. Keep it out of `vars` and Git.
 
@@ -118,6 +125,95 @@ previously stored as a secret.
 Run `npm run types --workspace @cloudflare-obsidian-livesync/mcp` after config
 changes. Both generation and CI checks use `--strict-vars=false`, so generated
 bindings remain `string` instead of embedding deployment values.
+
+## Folder access policy
+
+Example deployment `vars` (set separately for each environment):
+
+```jsonc
+"MCP_PATH_RULES": [
+  { "path": "Private/", "access": "none" },
+  { "path": "Journal/", "access": "read" }
+],
+"MCP_HIDE_DOT_FOLDERS": "true"
+```
+
+JSON text is also accepted, including in local `.dev.vars`:
+
+```dotenv
+MCP_PATH_RULES='[{"path":"Private/","access":"none"},{"path":"Journal/","access":"read"}]'
+MCP_HIDE_DOT_FOLDERS=true
+```
+
+Those local overrides are for development only. Keep production policy in
+Wrangler `vars`, and keep deployment `--secrets-file` input limited to
+`GITHUB_CLIENT_SECRET`; do not upload development policy overrides as secrets.
+
+The committed template uses the string `"[]"` to avoid empty-array literal type
+issues in Wrangler's generated declarations. Array bindings are parsed as
+`unknown` and supported equally. Limits are 64 rules, 1,024 characters per rule
+path, and 128 KiB for JSON text configuration.
+
+| Rule | Discovery and reads | Mutations |
+| --- | --- | --- |
+| `none` | Omitted from list/search; direct reads return `not_found` | `access_denied` |
+| `read` | Available, including attachment reads | `access_denied` |
+| No match | Available | Existing global write setting and OAuth scopes apply |
+
+Rules only restrict permissions. The most restrictive match wins, regardless of
+order: a child `read` rule cannot reopen a parent `none` subtree. All mutation
+forms are covered, including creation, append, text/frontmatter patches and
+deletion. Denials occur before existence/revision checks or conflict
+reconciliation and use the fixed message `This path is not writable via MCP`.
+Copying out of a read-only folder is allowed; deleting the source is not.
+
+Paths are literal folder subtrees, not globs. `Private` and `Private/` are
+identical; neither matches `Private notes/`. Configuration accepts leading `/`
+and `./`; tool requests remain strictly vault-relative. Traversal (`..`),
+backslashes and invalid/empty segments are rejected.
+
+Policy matching always ignores case, even for case-sensitive vaults, normalizes
+Unicode to NFC, and trims trailing ASCII dots/spaces from each segment for
+comparison. Thus `private/`, `Private./` and `Private /` receive the restrictions
+of `Private/`, preventing these aliases from bypassing rules when synchronized
+to clients with different filesystem conventions. A segment that normalizes to
+empty is rejected. Stored paths, document IDs, ordinary file resolution and query
+prefix matching retain their existing behavior. Unrestricted `v1./` and
+`Draft /` folders remain writable. This does not emulate every filesystem alias.
+
+Hidden files are filtered before pagination, including snippets, selected
+properties, attachment metadata and search coverage counts. Listing a hidden
+prefix returns an empty successful list. Search cursors from a different policy
+receive the existing changed-query error: restart without the cursor. List
+cursors remain best-effort; restart a full inventory after changing policy to
+include newly visible files behind the previous continuation position.
+
+The current policy applies on every request, including requests using existing
+OAuth tokens. There are no automatic compatibility probes or legacy RPC retries.
+Deploy the storage and MCP Workers together, storage first. The derived search
+index rebuilds after this upgrade; search may briefly report it is catching up.
+Changing rules afterwards does not require rebuilding the index.
+
+**Scope and limitations:** new folders are accessible until restricted; this is
+not an allowlist. Write-capable clients can infer that a path is restricted by
+attempting a write, but the denial does not depend on whether a file exists.
+Visible notes can contain copied private text, private filenames or links such
+as `![[Private/Diary]]`; those strings are not redacted. Fetching a hidden target
+still fails. Attachments use their own paths, so an attachment in a shared folder
+is not hidden merely because a private note references it. Retrieved content
+cannot be retracted. Dot-folder hiding does not hide a root dot-file like
+`.example.md`. A shared search index can still have timing, ranking or cursor
+invalidation effects from hidden data; this is not physical data isolation.
+
+These rules affect MCP semantic operations only. Standard CouchDB/Obsidian
+replication, raw document access and backups retain full vault access. Worker
+operators and clients possessing storage credentials are outside this boundary.
+
+When upgrading, add `MCP_PATH_RULES` to existing deployment copies **before**
+deploying. Use rules or explicitly `"[]"`; missing/invalid values produce a generic
+client configuration error and an operator log naming the invalid variable,
+without its value or folder names. Each invalid variable is logged at most once
+per Worker isolate. Do not replace an existing deployment file with the template.
 
 ## Verify
 
@@ -266,7 +362,8 @@ do not fit are explicitly omitted, never silently shortened; later smaller
 items can still fit. Retry omissions with `read_file` or narrower ranges.
 Each whole note still has the existing 512,000-byte reconstruction limit.
 Batching reduces client round trips, not storage work. This additive MCP tool
-reuses contract 5 single-file RPC; no storage contract upgrade is required.
+uses the same policy-enforced single-file RPC as individual reads; each item
+receives the current deployment policy.
 
 ## Tool execution diagnostics
 

@@ -1,3 +1,4 @@
+import { policyPathKey } from '@cloudflare-obsidian-livesync/contracts';
 import {
   DirectFileManipulator,
   type DirectFileManipulatorOptions,
@@ -100,6 +101,19 @@ export class CommonlibFacade {
     for await (const entry of this.manipulator.enumerateAllNormalDocs({ metaOnly: true })) {
       const metadata = listedMetadata(entry);
       if (metadata) yield metadata;
+    }
+  }
+
+  /** Metadata invariant only; never loads chunks or resolves/reports conflicts. */
+  async hasMatchingPathKey(path: string): Promise<boolean> {
+    await this.ready();
+    const id = await this.manipulator.path2id(path as CommonlibPath);
+    try {
+      const entry = await this.manipulator.liveSyncLocalDB.getRaw(id);
+      return 'path' in entry && typeof entry.path === 'string' && policyPathKey(entry.path) === policyPathKey(path);
+    } catch (error) {
+      if (isMissing(error)) return true;
+      throw error;
     }
   }
 

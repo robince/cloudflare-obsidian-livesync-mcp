@@ -51,7 +51,7 @@ trust boundary across the deployment, not per-vault tenant authorization.
 - Mango queries remain scans. Chunk maintenance scans retained revision bodies
   in bounded batches with a fail-closed budget; large histories may exceed it.
 
-## Semantic MCP search (contract version 5)
+## Semantic MCP search (contract version 6)
 
 Each vault Durable Object keeps a private FTS5 index derived from the
 authoritative LiveSync revision tree. `search_files` catches it up from the
@@ -151,7 +151,7 @@ that gate around their entire operation, avoiding re-entrant deadlocks. There is
 no automatic cleanup. Compaction deliberately sacrifices readable historical
 bodies; conflict resolution and compaction are distinct retention decisions.
 
-The semantic contract is version 5. Only disposable derived-index tables are
+The semantic contract is version 6. Only disposable derived-index tables are
 rebuilt during schema migration; the authoritative namespace, revisions and
 replication checkpoints are preserved. Search content, normalized properties,
 conflict metadata and index checkpoint update transactionally. Persisted cursor
@@ -179,3 +179,26 @@ Format-1 archives require the saved old application and a compatible schema-1
 recovery target. An old Worker alone is not a safe rollback after migration.
 See [rollout and recovery](docs/backup-recovery.md#schema-2-rollout-and-recovery)
 for pre-migration backup verification, cutover and recovery steps.
+
+
+## MCP folder access (contract 6)
+
+All semantic data RPC methods require an explicit path-policy envelope; public
+MCP tool arguments are unchanged. Folder rules restrict reads/discovery (`none`)
+or writes (`read`), with optional dot-folder hiding. Matching always ignores case,
+normalizes Unicode and trailing dots/spaces for comparison, and preserves stored
+paths and document IDs. The most restrictive matching rule wins.
+
+Hidden reads return `not_found`; denied writes use the same `access_denied`
+response regardless of existence. Enforcement precedes conflict reconciliation.
+Search visibility predicates run before pagination and also scope coverage
+counts. The derived search schema advances from 3 to 4 and rebuilds only index
+tables. Search fingerprints include policy; list cursors advance to version 2
+with file/attachment kind binding and retain best-effort document-ID traversal.
+
+Standard CouchDB protocol access, Obsidian synchronization, authoritative revision
+history and full-vault backups remain unchanged. The policy is supplied per call
+by the MCP Worker, so differently configured deployments can share one vault.
+Deploy the matching Workers together and explicitly configure `MCP_PATH_RULES`
+in every MCP environment. See [folder access policy](apps/cloudflare-obsidian-mcp/README.md#folder-access-policy)
+for configuration and limits of the privacy boundary.

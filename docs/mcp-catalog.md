@@ -1,11 +1,21 @@
 # MCP sibling catalogue and next interface review
 
-Current implementation: 2026-09-05. The LiveSync MCP exposes 15 tools for
+Current implementation: 2026-10-11. The LiveSync MCP exposes 15 tools for
 write-authorized callers and 9 for read-only callers, including bounded
 `read_files` (1–10 reads, 1 MiB combined result), tool-selection/subtree
-instructions, and permission-aware registration. The storage contract remains 5.
+instructions, and permission-aware registration. The storage contract is 6.
 Property queries, pagination, outlines, line reads, JSON text results and
 immutable-ID authorization are implemented; do not plan them as new features.
+
+Deployment-configured folder rules now support `none` (hidden) and `read`
+(read-only), with most-restrictive precedence and optional dot-folder hiding.
+Policy matching is case-insensitive with Unicode and trailing-dot/space
+comparison normalization. All MCP tools use policy-bearing RPC envelopes;
+search/list filtering happens before pagination. Hidden reads return `not_found`;
+all path-denied mutations return fixed `access_denied` errors. Existing OAuth
+scopes and the global write switch still apply. New folders are accessible until
+restricted. Standard Obsidian sync and backup behavior are unchanged. See
+[folder access configuration and limitations](../apps/cloudflare-obsidian-mcp/README.md#folder-access-policy).
 
 Personal-use checks have exercised batch reads, creation and copy/delete
 organisation. They exposed client-side latency and partial completion; the full
@@ -31,7 +41,7 @@ alone is no longer a fair description of the default experience.
 
 ## Capability mapping
 
-| Intent | LiveSync contract 5 | obsidian-web-mcp | Recommendation here |
+| Intent | LiveSync contract 6 | obsidian-web-mcp | Recommendation here |
 | --- | --- | --- | --- |
 | Discover paths | `list_files`, `list_attachments` | `vault_list` with depth/globs | Keep existing tools; explain Markdown versus other files and prefix semantics. |
 | Find content/properties | `search_files` combines literal AND text, typed AND filters, selected properties and cursor | `vault_search`, `vault_search_frontmatter` | Keep the combined tool; provide separate text, property-only and combined examples. |
@@ -83,7 +93,7 @@ tool only if repeating those details becomes a practical problem.
 ## Personal-use acceptance exercise
 
 Use a disposable note/folder with the actual MCP client after confirming its
-tools/list reflects contract 5. The complete exercise has not yet been recorded.
+tools/list reflects contract 6. The complete exercise has not yet been recorded.
 
 1. Find a note by topic; query notes by a typed property; exhaust a paginated
    query and distinguish no matches from incomplete index coverage.

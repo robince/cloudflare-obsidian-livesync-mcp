@@ -1,3 +1,4 @@
+import { pathAccess, policyPathKey, type VaultPathPolicy } from '@cloudflare-obsidian-livesync/contracts';
 import { fileLines, outline } from './outline';
 import { getVaultFileOutlineRequestSchema, type GetVaultFileOutlineRequest, type GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
 import {
@@ -50,11 +51,11 @@ type VaultDependencies = {
   ) => Promise<CommonlibFacade>;
 };
 
-type Cursor = { v: 1; prefix: string; id: string };
+type Cursor = { v: 2; prefix: string; kind: 'file' | 'attachment'; id: string };
 
 /** Logical vault operations exposed by the storage Durable Object. */
 export class LiveSyncVault {
-  constructor(private readonly dependencies: VaultDependencies) {}
+  constructor(private readonly dependencies: VaultDependencies, private readonly pathPolicy: VaultPathPolicy) {}
 
   async status(): Promise<VaultResult<VaultStatusData>> {
     try {
@@ -92,7 +93,7 @@ export class LiveSyncVault {
     const prefix = parsed.data.prefix ?? '';
     if (!isSafePrefix(prefix)) return failure('invalid_input', 'Prefix must be a safe relative path.');
 
-    const cursor = decodeCursor(parsed.data.cursor, prefix);
+    const cursor = decodeCursor(parsed.data.cursor, prefix, kind);
     if (parsed.data.cursor && !cursor) return failure('invalid_input', 'Cursor does not match this prefix.');
     const limit = parsed.data.limit ?? VAULT_LIMITS.defaultListLimit;
 
@@ -104,6 +105,7 @@ export class LiveSyncVault {
       let lastId: string | undefined;
       for await (const file of commonlib.enumerate()) {
         if (!isListed(file, prefix, profile.handleFilenameCaseSensitive)) continue;
+        if (pathAccess(this.pathPolicy, file.path) === 'none') continue;
         if (cursor && file.id <= cursor.id) continue;
         if (page.length === limit || examined === VAULT_LIMITS.maxListLimit) {
           extra = true;
@@ -116,7 +118,7 @@ export class LiveSyncVault {
         page.push({ ...file, ...(versions > 1 ? { unresolvedVersions: versions } : {}) });
       }
       const next = extra && lastId
-        ? encodeCursor({ v: 1, prefix, id: lastId })
+        ? encodeCursor({ v: 2, prefix, kind, id: lastId })
         : undefined;
       return success({
         files: page,
@@ -131,7 +133,7 @@ export class LiveSyncVault {
       return failure('invalid_input', 'Path must be a safe relative Markdown file.');
     }
 
-    return this.withCommonlib(async (commonlib) => {
+    return this.withFile(parsed.data.path, false, async (commonlib) => {
       const meta = await commonlib.inspect(parsed.data.path);
       if (!meta) return failure('not_found', 'File not found.');
       if (meta.datatype !== 'plain') {
@@ -173,9 +175,9 @@ export class LiveSyncVault {
       return failure('invalid_input', 'Path must be a safe relative non-Markdown file.');
     }
 
-    return this.withCommonlib(async (commonlib) => {
+    return this.withFile(parsed.data.path, false, async (commonlib) => {
       const meta = await commonlib.inspect(parsed.data.path);
-      if (!meta) return failure('not_found', 'Attachment not found.');
+      if (!meta) return failure('not_found', 'File not found.');
       if (meta.datatype !== 'plain' && meta.datatype !== 'newnote') {
         return failure('unsupported', 'Unsupported LiveSync attachment type.');
       }
@@ -186,12 +188,12 @@ export class LiveSyncVault {
       let revision: string;
       if (meta.datatype === 'plain') {
         const file = await commonlib.read(parsed.data.path, VAULT_LIMITS.maxAttachmentReadBytes);
-        if (!file) return failure('not_found', 'Attachment not found.');
+        if (!file) return failure('not_found', 'File not found.');
         bytes = new TextEncoder().encode(file.content);
         revision = file.revision;
       } else {
         const file = await commonlib.readBinary(parsed.data.path, VAULT_LIMITS.maxAttachmentReadBytes);
-        if (!file) return failure('not_found', 'Attachment not found.');
+        if (!file) return failure('not_found', 'File not found.');
         bytes = file.content;
         revision = file.revision;
       }
@@ -210,7 +212,7 @@ export class LiveSyncVault {
     if (!parsed.success || !isMarkdownPath(parsed.data?.path ?? '')) {
       return failure('invalid_input', 'Path must be a safe relative Markdown file.');
     }
-    return this.withCommonlib(async (commonlib) => {
+    return this.withFile(parsed.data.path, false, async (commonlib) => {
       const file = await commonlib.read(parsed.data.path, VAULT_LIMITS.maxReadBytes);
       if (!file) return failure('not_found', 'File not found.');
       return success({ path: parsed.data.path, revision: file.revision, frontmatter: parseFrontmatter(file.content) });
@@ -225,7 +227,7 @@ export class LiveSyncVault {
     const contentError = contentTooLarge(parsed.data.content);
     if (contentError) return contentError;
 
-    return this.withCommonlib(async (commonlib) => {
+    return this.withFile(parsed.data.path, true, async (commonlib) => {
       await commonlib.reconcileBeforeMutation(parsed.data.path);
       const existing = await commonlib.inspect(parsed.data.path);
       if (existing) return { ok: false, error: revisionConflict(parsed.data.path) };
@@ -248,7 +250,7 @@ export class LiveSyncVault {
     const contentError = contentTooLarge(parsed.data.content);
     if (contentError) return contentError;
 
-    return this.withCommonlib(async (commonlib) => {
+    return this.withFile(parsed.data.path, true, async (commonlib) => {
       await commonlib.reconcileBeforeMutation(parsed.data.path);
       const existing = await commonlib.inspect(parsed.data.path);
       if (!existing) return failure('not_found', 'File not found.');
@@ -317,7 +319,7 @@ export class LiveSyncVault {
       return failure('invalid_input', 'Path must be a safe relative Markdown file.');
     }
 
-    return this.withCommonlib(async (commonlib) => {
+    return this.withFile(parsed.data.path, true, async (commonlib) => {
       await commonlib.reconcileBeforeMutation(parsed.data.path);
       const existing = await commonlib.inspect(parsed.data.path);
       if (!existing) return failure('not_found', 'File not found.');
@@ -338,7 +340,7 @@ export class LiveSyncVault {
     expectedRevision: string,
     transform: (content: string) => string,
   ): Promise<VaultResult<WriteVaultFileData>> {
-    return this.withCommonlib(async (commonlib) => {
+    return this.withFile(path, true, async (commonlib) => {
       await commonlib.reconcileBeforeMutation(path);
       const existing = await commonlib.inspect(path);
       if (!existing) return failure('not_found', 'File not found.');
@@ -358,6 +360,27 @@ export class LiveSyncVault {
       );
       if (!written) return { ok: false, error: revisionConflict(path) };
       return success({ path: existing.path, revision: written.revision });
+    });
+  }
+
+  private async withFile<T>(
+    path: string,
+    write: boolean,
+    operation: (commonlib: CommonlibFacade) => Promise<VaultResult<T>>,
+  ): Promise<VaultResult<T>> {
+    if (!policyPathKey(path)) return failure('invalid_input', 'Path must be a safe relative path.');
+    const access = pathAccess(this.pathPolicy, path);
+    if (write && access !== 'write') return failure('access_denied', 'This path is not writable via MCP');
+    if (access === 'none') return failure('not_found', 'File not found.');
+    return this.withCommonlib(async (commonlib) => {
+      // Defensive identity assertion, before conflicts, content, or reconciliation.
+      if (!await commonlib.hasMatchingPathKey(path)) {
+        console.error({ event: 'vault_path_identity_mismatch' });
+        return write
+          ? failure('access_denied', 'This path is not writable via MCP')
+          : failure('not_found', 'File not found.');
+      }
+      return operation(commonlib);
     });
   }
 
@@ -498,14 +521,14 @@ function encodeCursor(cursor: Cursor): string {
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }
 
-function decodeCursor(value: string | undefined, prefix: string): Cursor | undefined {
+function decodeCursor(value: string | undefined, prefix: string, kind: 'file' | 'attachment'): Cursor | undefined {
   if (!value) return undefined;
   try {
     const base64 = value.replaceAll('-', '+').replaceAll('_', '/') + '==='.slice((value.length + 3) % 4);
     const binary = atob(base64);
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
     const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Cursor;
-    return parsed.v === 1 && parsed.prefix === prefix && typeof parsed.id === 'string' ? parsed : undefined;
+    return parsed.v === 2 && parsed.prefix === prefix && parsed.kind === kind && typeof parsed.id === 'string' ? parsed : undefined;
   } catch {
     return undefined;
   }

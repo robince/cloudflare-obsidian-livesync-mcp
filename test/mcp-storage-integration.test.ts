@@ -1,9 +1,10 @@
+import { rpcRequest } from './vault-policy-helpers';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createVaultMcpServer } from '../apps/cloudflare-obsidian-mcp/src/vault-tools';
-import type { VaultRpc } from '../apps/cloudflare-obsidian-mcp/src/vault-rpc';
+import { withVaultPathPolicy } from '../apps/cloudflare-obsidian-mcp/src/vault-rpc';
 import fixture from './fixtures/livesync-1.0.21.json';
 import type { JsonObject } from '../src/types';
 import { conflictVault } from './conflict-fixtures';
@@ -28,7 +29,7 @@ describe('MCP to storage Durable Object integration', () => {
     const { stub, path, tree } = await conflictVault();
     const before = await tree();
     for (const writable of [false, true]) {
-      const server = createVaultMcpServer(stub as unknown as VaultRpc, {
+      const server = createVaultMcpServer(withVaultPathPolicy(stub, { rules: [], hideDotFolders: false }), {
         writesEnabled: true, canRead: () => true, canWrite: () => writable,
       });
       const client = new Client({ name: 'conflict-client', version: '1' });
@@ -70,7 +71,7 @@ describe('MCP to storage Durable Object integration', () => {
       children: ['h:mcp-attachment'], ctime: 1, mtime: 2, size: 3, eden: {},
     });
 
-    const server = createVaultMcpServer(stub as unknown as VaultRpc, {
+    const server = createVaultMcpServer(withVaultPathPolicy(stub, { rules: [], hideDotFolders: false }), {
       writesEnabled: true,
       canRead: () => true,
       canWrite: () => true,
@@ -185,7 +186,7 @@ describe('MCP to storage Durable Object integration', () => {
       name: 'delete_file',
       arguments: { path: 'notes/from-mcp.md', expectedRevision: editedData.revision },
     })).resolves.toMatchObject({ structuredContent: { path: 'notes/from-mcp.md' } });
-    await expect(stub.readVaultFile({ path: 'notes/from-mcp.md' })).resolves.toMatchObject({
+    await expect(stub.readVaultFile(rpcRequest({ path: 'notes/from-mcp.md' }))).resolves.toMatchObject({
       ok: false,
       error: { code: 'not_found' },
     });
@@ -195,7 +196,7 @@ describe('MCP to storage Durable Object integration', () => {
     const name = `mcp-readonly-${crypto.randomUUID().replaceAll('-', '')}`;
     const stub = env.POUCH_DATABASES.getByName(name);
     await stub.ensureDatabase(name);
-    const server = createVaultMcpServer(stub as unknown as VaultRpc, {
+    const server = createVaultMcpServer(withVaultPathPolicy(stub, { rules: [], hideDotFolders: false }), {
       writesEnabled: false,
       canRead: () => true,
       canWrite: () => true,
