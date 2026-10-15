@@ -1,3 +1,4 @@
+import { policyPathKey } from '@cloudflare-obsidian-livesync/contracts';
 import {
   DirectFileManipulator,
   type DirectFileManipulatorOptions,
@@ -71,7 +72,8 @@ export class CommonlibFacade {
   constructor(
     databaseName: string,
     fetch: typeof globalThis.fetch,
-    profile: VaultProfileInspection
+    profile: VaultProfileInspection,
+    private readonly pathIdentityFailure?: 'not_found' | 'access_denied',
   ) {
     if (!profile.supported) {
       throw new Error(`unsupported LiveSync profile (${profile.reasons.join(', ')})`);
@@ -101,6 +103,21 @@ export class CommonlibFacade {
       const metadata = listedMetadata(entry);
       if (metadata) yield metadata;
     }
+  }
+
+  /** Check the loaded metadata before content, deletion or conflict handling. */
+  private async getNote(path: string, options: { rev?: string; conflicts?: boolean; revs_info?: boolean } = {}) {
+    const id = await this.manipulator.path2id(path as CommonlibPath);
+    const entry = await this.manipulator.liveSyncLocalDB.getRaw(id, { conflicts: true, revs_info: true, ...options });
+    if (this.pathIdentityFailure) {
+      const key = policyPathKey(path);
+      if (!key || !('path' in entry) || typeof entry.path !== 'string' || policyPathKey(entry.path) !== key) {
+        console.error({ event: 'vault_path_identity_mismatch' });
+        throwVaultError({ code: this.pathIdentityFailure, message: this.pathIdentityFailure === 'access_denied'
+          ? 'This path is not writable via MCP' : 'File not found.' });
+      }
+    }
+    return entry;
   }
 
   async inspect(path: string): Promise<CommonlibFileMetadata | false> {
@@ -236,7 +253,7 @@ export class CommonlibFacade {
     try {
       let baseRevision = expectedRevision;
       if (baseRevision === undefined) {
-        const existing = await db.getDBEntryMeta(path as CommonlibPath, undefined, true);
+        const existing = await this.conflictNote(path);
         if (existing && !isDeleted(existing)) return false;
         baseRevision = existing === false ? undefined : existing._rev;
       }
@@ -258,9 +275,8 @@ export class CommonlibFacade {
   async remove(path: string, expectedRevision: string): Promise<{ revision: string } | false> {
     await this.ready();
     await this.assertUnconflicted(path);
-    const id = await this.manipulator.path2id(path as CommonlibPath);
     try {
-      const current = await this.manipulator.liveSyncLocalDB.getRaw(id);
+      const current = await this.getNote(path);
       if (!current || current._rev !== expectedRevision) return false;
       const tombstone = { ...current, deleted: true, mtime: Date.now() } as typeof current & { deleted: boolean; _deleted?: boolean };
       delete tombstone._deleted;
@@ -306,14 +322,14 @@ export class CommonlibFacade {
         // Validate every live leaf before asking Commonlib to classify a pair.
         // Missing history/chunks must not be treated as empty or identical data.
         for (const rev of [observed._rev, ...(observed._conflicts ?? [])]) {
-          const leaf = await db.getRaw(observed._id as CommonlibDocumentId, { rev, revs_info: true });
+          const leaf = await this.getNote(path, { rev });
           if (noteDatatype(leaf) !== 'plain' || isDeleted(leaf)) stop();
           await this.validateMergeBody(leaf);
           const shared = new Set(observed._revs_info?.filter(r => r.status === 'available').map(r => r.rev));
           const base = leaf._revs_info?.filter(r => r.status === 'available' && shared.has(r.rev))
             .sort((a, b) => parseInt(b.rev) - parseInt(a.rev))[0];
           if (base && base.rev !== rev) {
-            await this.validateMergeBody(await db.getRaw(observed._id as CommonlibDocumentId, { rev: base.rev }));
+            await this.validateMergeBody(await this.getNote(path, { rev: base.rev }));
           }
         }
         const result = await db.tryAutoMerge(path as CommonlibPath, true);
@@ -327,12 +343,12 @@ export class CommonlibFacade {
           if (!observed._conflicts?.includes(losingRev)) stop();
           // Commonlib finds the nearest *available shared* ancestor. Validate
           // that body's chunks as well; never infer ancestry from generation.
-          const other = await db.getRaw(observed._id as CommonlibDocumentId, { rev: losingRev, revs_info: true });
+          const other = await this.getNote(path, { rev: losingRev });
           const available = new Set(observed._revs_info?.filter(r => r.status === 'available').map(r => r.rev));
           const base = other._revs_info?.filter(r => r.status === 'available' && available.has(r.rev))
             .sort((a, b) => parseInt(b.rev) - parseInt(a.rev))[0];
           if (!base) stop();
-          await this.validateMergeBody(await db.getRaw(observed._id as CommonlibDocumentId, { rev: base!.rev }));
+          await this.validateMergeBody(await this.getNote(path, { rev: base!.rev }));
           if (new TextEncoder().encode(result.result).byteLength > VAULT_LIMITS.maxWriteBytes) stop();
           // Deliberately bypass public write's no-conflicts guard, but retain
           // Commonlib's ordinary exact-revision CAS, never a forced branch put.
@@ -362,6 +378,7 @@ export class CommonlibFacade {
         await db.removeRaw(observed._id as CommonlibDocumentId, losingRev);
         changed = true;
       } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === this.pathIdentityFailure) throw error;
         if (error instanceof Error && 'resolution' in error) throw error;
         // A failed CAS, unavailable body, or interrupted resolution preserves
         // remaining leaves. Never apply the user's original mutation.
@@ -385,9 +402,8 @@ export class CommonlibFacade {
   }
 
   private async conflictNote(path: string): Promise<RawNote | false> {
-    const id = await this.manipulator.path2id(path as CommonlibPath);
     try {
-      return await this.manipulator.liveSyncLocalDB.getRaw(id, { conflicts: true, revs_info: true });
+      return await this.getNote(path);
     } catch (error) {
       if (isMissing(error)) return false;
       throw error;
@@ -416,9 +432,8 @@ export class CommonlibFacade {
   }
 
   private async rawNote(path: string): Promise<RawNote | false> {
-    const id = await this.manipulator.path2id(path as CommonlibPath);
     try {
-      const entry = await this.manipulator.liveSyncLocalDB.getRaw(id, { conflicts: true, revs_info: true }) as unknown as RawNote;
+      const entry = await this.getNote(path) as unknown as RawNote;
       if (entry._conflicts?.length) throwVaultError(livesyncConflict(path, entry._conflicts.length + 1));
       if (!entry._rev || isDeleted(entry) || noteDatatype(entry) === 'leaf') return false;
       return entry;

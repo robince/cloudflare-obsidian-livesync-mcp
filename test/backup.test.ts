@@ -1,3 +1,4 @@
+import { rpcRequest } from './vault-policy-helpers';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject, evictDurableObject } from 'cloudflare:test';
 import { describe, it, expect } from 'vitest';
@@ -45,7 +46,7 @@ describe('database backups', () => {
     const attachment = await restored.getDocument('restored', 'attachment', { attachments: true });
     expect(attachment).toMatchObject({ _attachments: { 'a.bin': { data: 'AAEC/w==' } } });
     await expect(restored.getDocument('restored', '_local/obsydian_livesync_milestone')).resolves.toMatchObject({ locked: true, accepted_nodes: [], cleaned: false });
-    expect(await restored.readVaultFile({ path: 'notes/unicode-雪.md' })).toMatchObject({ ok: true });
+    expect(await restored.readVaultFile(rpcRequest({ path: 'notes/unicode-雪.md' }))).toMatchObject({ ok: true });
     expect(await runInDurableObject(restored, async (db: PouchDatabase) => { try { await db.restoreBackup('restored', 'vault', m.id); } catch { return 'refused'; } })).toBe('refused');
     const before = await expectCounts(restored, 'restored');
     const next = await restored.putDocument('restored', { _id: 'new', value: true });
@@ -106,7 +107,7 @@ describe('database backups', () => {
     expect(await runInDurableObject(restored, async (db: PouchDatabase) => { try { await db.ensureDatabase('recovery'); } catch { return 'refused'; } })).toBe('refused');
     const response = await restored.fetch(new Request('https://local/', { headers: { 'x-pouchdb-database': 'recovery' } }));
     expect(response.status).toBe(503);
-    expect((await restored.readVaultFile({ path: 'notes/frontmatter.md' })).ok).toBe(false);
+    expect((await restored.readVaultFile(rpcRequest({ path: 'notes/frontmatter.md' }))).ok).toBe(false);
     await env.BACKUP_BUCKET.put(key, bytes);
     expect(await runInDurableObject(restored, async (db: PouchDatabase) => { try { await db.restoreBackup('recovery', 'vault', m.id); } catch { return 'refused'; } })).toBe('refused');
     await expect(restored.restoreBackup('recovery', 'vault', m.id, true)).resolves.toMatchObject({ ok: true });
@@ -139,7 +140,7 @@ describe('database backups', () => {
     expect(interrupted).toBe(true);
     expect((await restored.fetch(new Request('https://local/', { headers: { 'x-pouchdb-database': 'interrupted' } }))).status).toBe(503);
     await expect(restored.restoreBackup('interrupted', 'vault', m.id, true)).resolves.toMatchObject({ ok: true });
-    expect(await restored.readVaultFile({ path: 'notes/frontmatter.md' })).toMatchObject({ ok: true });
+    expect(await restored.readVaultFile(rpcRequest({ path: 'notes/frontmatter.md' }))).toMatchObject({ ok: true });
     expect(await restored.getDocument('interrupted', 'partial-11')).toMatchObject({ data: 'x'.repeat(400_000) });
   });
 
@@ -163,7 +164,7 @@ describe('database backups', () => {
         statuses.push(response.status);
       }
       const rpc = await db.putDocument('vault', { _id: 'blocked' }).then(() => true, () => false);
-      const semantic = await db.createVaultFile({ path: 'blocked.md', content: 'blocked' });
+      const semantic = await db.createVaultFile(rpcRequest({ path: 'blocked.md', content: 'blocked' }));
       release(); await backup; db['env'].BACKUP_BUCKET = original;
       return { statuses, rpc, semantic, running: (await db.backupStatus()).running };
     });

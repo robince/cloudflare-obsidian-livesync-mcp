@@ -1,7 +1,9 @@
 import { z } from 'zod';
 
+export * from './path-policy';
+
 /** Incremented whenever the semantic vault RPC wire contract changes. */
-export const CONTRACT_VERSION = 5 as const;
+export const CONTRACT_VERSION = 6 as const;
 
 export const VAULT_LIMITS = {
   maxMcpResponseBytes: 8 * 1024 * 1024,
@@ -27,6 +29,7 @@ export const VAULT_LIMITS = {
 } as const;
 
 export const vaultErrorCodeSchema = z.enum([
+  'access_denied',
   'cursor_expired',
   'invalid_input',
   'not_found',
@@ -41,7 +44,7 @@ export const vaultErrorCodeSchema = z.enum([
 
 export const vaultErrorSchema = z.discriminatedUnion('code', [
   z.object({
-    code: z.enum(['cursor_expired', 'invalid_input', 'not_found', 'unsupported', 'too_large', 'unavailable', 'internal']),
+    code: z.enum(['access_denied', 'cursor_expired', 'invalid_input', 'not_found', 'unsupported', 'too_large', 'unavailable', 'internal']),
     message: z.string(),
   }),
   z.object({

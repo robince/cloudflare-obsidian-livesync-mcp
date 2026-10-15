@@ -24,7 +24,7 @@ import type { VaultRpc } from '../src/vault-rpc';
 
 const fakeRpc: VaultRpc = {
   async vaultStatus() {
-    return { ok: true, data: { contractVersion: 5, compatible: true, reasons: [] } };
+    return { ok: true, data: { contractVersion: 6, compatible: true, reasons: [] } };
   },
   async listVaultFiles() {
     return { ok: true, data: { files: [{ path: 'notes/a.md', revision: '1-a', sizeBytes: 4, modifiedAt: 2 }] } };
@@ -216,7 +216,7 @@ describe('MCP vault surface', () => {
       canWrite: () => true,
     });
     await expect(allowed.vaultStatus()).resolves.toMatchObject({
-      structuredContent: { contractVersion: 5, compatible: true },
+      structuredContent: { contractVersion: 6, compatible: true },
     });
     await expect(allowed.listFiles({})).resolves.toMatchObject({
       structuredContent: { files: [{ path: 'notes/a.md' }] },

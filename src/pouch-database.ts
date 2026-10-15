@@ -1,3 +1,4 @@
+import { parseVaultRpcRequest, type VaultRpcRequest, type VaultPathPolicy } from '@cloudflare-obsidian-livesync/contracts';
 import { diagnostic, operationFor } from './diagnostics';
 import { exportTables, importTables, verifyBackup, readManifest, directory, prune } from './backup/storage';
 import { fail, DATABASE_NAME, TABLES } from './backup/format';
@@ -272,59 +273,85 @@ export class PouchDatabase extends DurableObject<Env> {
    * Durable Object owns exactly one persisted database identity.
    */
   async vaultStatus(): Promise<VaultResult<VaultStatusData>> {
-    return this.vault().status();
+    return this.vault({ rules: [], hideDotFolders: false }).status();
   }
 
-  async listVaultFiles(request: ListVaultFilesRequest): Promise<VaultResult<ListVaultFilesData>> {
-    return this.vault().list(request);
+  async listVaultFiles(request: VaultRpcRequest<ListVaultFilesRequest>): Promise<VaultResult<ListVaultFilesData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.vault(parsed.data.pathPolicy).list(parsed.data.request);
   }
 
-  async searchVaultFiles(request: SearchVaultFilesRequest): Promise<VaultResult<SearchVaultFilesData>> {
-    return this.withSearchLifecycle(() => this.search().search(request));
+  async searchVaultFiles(request: VaultRpcRequest<SearchVaultFilesRequest>): Promise<VaultResult<SearchVaultFilesData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.withSearchLifecycle(() => this.search().search(parsed.data.request, parsed.data.pathPolicy));
   }
 
-  async listVaultAttachments(request: ListVaultAttachmentsRequest): Promise<VaultResult<ListVaultAttachmentsData>> {
-    return this.vault().listAttachments(request);
+  async listVaultAttachments(request: VaultRpcRequest<ListVaultAttachmentsRequest>): Promise<VaultResult<ListVaultAttachmentsData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.vault(parsed.data.pathPolicy).listAttachments(parsed.data.request);
   }
 
-  async readVaultFile(request: ReadVaultFileRequest): Promise<VaultResult<ReadVaultFileData>> {
-    return this.vault().read(request);
+  async readVaultFile(request: VaultRpcRequest<ReadVaultFileRequest>): Promise<VaultResult<ReadVaultFileData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.vault(parsed.data.pathPolicy).read(parsed.data.request);
   }
 
-  async getVaultFileOutline(request: GetVaultFileOutlineRequest): Promise<VaultResult<GetVaultFileOutlineData>> {
-    return this.vault().outline(request);
+  async getVaultFileOutline(request: VaultRpcRequest<GetVaultFileOutlineRequest>): Promise<VaultResult<GetVaultFileOutlineData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.vault(parsed.data.pathPolicy).outline(parsed.data.request);
   }
 
-  async readVaultAttachment(request: ReadVaultAttachmentRequest): Promise<VaultResult<ReadVaultAttachmentData>> {
-    return this.vault().readAttachment(request);
+  async readVaultAttachment(request: VaultRpcRequest<ReadVaultAttachmentRequest>): Promise<VaultResult<ReadVaultAttachmentData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.vault(parsed.data.pathPolicy).readAttachment(parsed.data.request);
   }
 
-  async readVaultFrontmatter(request: ReadVaultFrontmatterRequest): Promise<VaultResult<ReadVaultFrontmatterData>> {
-    return this.vault().readFrontmatter(request);
+  async readVaultFrontmatter(request: VaultRpcRequest<ReadVaultFrontmatterRequest>): Promise<VaultResult<ReadVaultFrontmatterData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.vault(parsed.data.pathPolicy).readFrontmatter(parsed.data.request);
   }
 
-  async createVaultFile(request: CreateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
-    return this.withSemanticWrite(() => this.vault().create(request));
+  async createVaultFile(request: VaultRpcRequest<CreateVaultFileRequest>): Promise<VaultResult<WriteVaultFileData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.withSemanticWrite(() => this.vault(parsed.data.pathPolicy).create(parsed.data.request));
   }
 
-  async updateVaultFile(request: UpdateVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
-    return this.withSemanticWrite(() => this.vault().update(request));
+  async updateVaultFile(request: VaultRpcRequest<UpdateVaultFileRequest>): Promise<VaultResult<WriteVaultFileData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.withSemanticWrite(() => this.vault(parsed.data.pathPolicy).update(parsed.data.request));
   }
 
-  async appendVaultFile(request: AppendVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
-    return this.withSemanticWrite(() => this.vault().append(request));
+  async appendVaultFile(request: VaultRpcRequest<AppendVaultFileRequest>): Promise<VaultResult<WriteVaultFileData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.withSemanticWrite(() => this.vault(parsed.data.pathPolicy).append(parsed.data.request));
   }
 
-  async patchVaultFile(request: PatchVaultFileRequest): Promise<VaultResult<PatchVaultFileData>> {
-    return this.withSemanticWrite(() => this.vault().patch(request));
+  async patchVaultFile(request: VaultRpcRequest<PatchVaultFileRequest>): Promise<VaultResult<PatchVaultFileData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.withSemanticWrite(() => this.vault(parsed.data.pathPolicy).patch(parsed.data.request));
   }
 
-  async patchVaultFrontmatter(request: PatchVaultFrontmatterRequest): Promise<VaultResult<PatchVaultFrontmatterData>> {
-    return this.withSemanticWrite(() => this.vault().patchFrontmatter(request));
+  async patchVaultFrontmatter(request: VaultRpcRequest<PatchVaultFrontmatterRequest>): Promise<VaultResult<PatchVaultFrontmatterData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.withSemanticWrite(() => this.vault(parsed.data.pathPolicy).patchFrontmatter(parsed.data.request));
   }
 
-  async deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>> {
-    return this.withSemanticWrite(() => this.vault().delete(request));
+  async deleteVaultFile(request: VaultRpcRequest<DeleteVaultFileRequest>): Promise<VaultResult<WriteVaultFileData>> {
+    const parsed = parseVaultRpcRequest(request);
+    if (!parsed.ok) return parsed;
+    return this.withSemanticWrite(() => this.vault(parsed.data.pathPolicy).delete(parsed.data.request));
   }
 
   private requireExists(): void {
@@ -333,14 +360,14 @@ export class PouchDatabase extends DurableObject<Env> {
     }
   }
 
-  private vault(): LiveSyncVault {
+  private vault(pathPolicy: VaultPathPolicy): LiveSyncVault {
     return new LiveSyncVault({
       profile: async () => {
         this.requireExists();
         return this.inspectCommonlibProfile();
       },
-      acquireCommonlib: (profile) => this.createCommonlib(profile),
-    });
+      acquireCommonlib: (profile, pathIdentityFailure) => this.createCommonlib(profile, pathIdentityFailure),
+    }, pathPolicy);
   }
 
   private search(): LiveSyncSearch {
@@ -390,14 +417,15 @@ export class PouchDatabase extends DurableObject<Env> {
     }
   }
 
-  private async createCommonlib(profile: VaultProfileInspection): Promise<CommonlibFacade> {
+  private async createCommonlib(profile: VaultProfileInspection, pathIdentityFailure?: 'not_found' | 'access_denied'): Promise<CommonlibFacade> {
     this.requireExists();
     if (!this.dbName) throw new Error('database identity is required');
     const { CommonlibFacade } = await import('./livesync-vault/commonlib');
     return new CommonlibFacade(
       this.dbName,
       this.inProcessCouchFetch(),
-      profile
+      profile,
+      pathIdentityFailure,
     );
   }
 

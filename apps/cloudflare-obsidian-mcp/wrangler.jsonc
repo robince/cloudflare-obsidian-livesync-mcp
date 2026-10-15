@@ -30,6 +30,8 @@
     "VAULT_DATABASE": "replace-me",
     "MCP_PUBLIC_BASE_URL": "https://replace-me.example.com",
     "MCP_WRITES_ENABLED": "false",
+    "MCP_PATH_RULES": "[]",
+    "MCP_HIDE_DOT_FOLDERS": "false",
     "GITHUB_ALLOWED_USER_IDS": "",
     "GITHUB_CLIENT_ID": ""
   },
@@ -44,6 +46,8 @@
         "VAULT_DATABASE": "replace-me",
         "MCP_PUBLIC_BASE_URL": "https://replace-me.example.com",
         "MCP_WRITES_ENABLED": "false",
+        "MCP_PATH_RULES": "[]",
+        "MCP_HIDE_DOT_FOLDERS": "false",
         "GITHUB_ALLOWED_USER_IDS": "",
         "GITHUB_CLIENT_ID": ""
       },

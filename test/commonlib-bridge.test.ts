@@ -1,3 +1,4 @@
+import { rpcRequest } from './vault-policy-helpers';
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -76,7 +77,7 @@ describe('Self-hosted LiveSync 1.0.21 compatibility in workerd', () => {
     }
 
     for (const [path, content] of Object.entries(fixture.files)) {
-      await expect(stub.readVaultFile({ path })).resolves.toMatchObject({
+      await expect(stub.readVaultFile(rpcRequest({ path }))).resolves.toMatchObject({
         ok: true,
         data: { path, content },
       });

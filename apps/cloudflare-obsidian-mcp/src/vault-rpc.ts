@@ -1,3 +1,5 @@
+import type { VaultPathPolicy, VaultRpcRequest } from '@cloudflare-obsidian-livesync/contracts';
+import { pathPolicyForEnv } from './path-policy';
 import type { GetVaultFileOutlineRequest, GetVaultFileOutlineData } from '@cloudflare-obsidian-livesync/contracts';
 import type {
   AppendVaultFileRequest,
@@ -30,6 +32,8 @@ export const VAULT_DATABASE_NAME = /^[a-z][a-z0-9_$()+-]*$/;
 
 type VaultRpcEnv = {
   VAULT_DATABASE?: unknown;
+  MCP_PATH_RULES?: unknown;
+  MCP_HIDE_DOT_FOLDERS?: unknown;
   POUCH_DATABASES: { getByName(name: string): unknown };
 };
 
@@ -53,6 +57,34 @@ export interface VaultRpc {
   patchVaultFile(request: PatchVaultFileRequest): Promise<VaultResult<PatchVaultFileData>>;
   patchVaultFrontmatter(request: PatchVaultFrontmatterRequest): Promise<VaultResult<PatchVaultFrontmatterData>>;
   deleteVaultFile(request: DeleteVaultFileRequest): Promise<VaultResult<WriteVaultFileData>>;
+}
+
+/** Internal wire surface: policy is never a public tool argument. */
+export type StorageVaultRpc = {
+  [K in keyof VaultRpc]: K extends 'vaultStatus' ? VaultRpc[K]
+    : VaultRpc[K] extends (request: infer R) => infer Result ? (envelope: VaultRpcRequest<R>) => Result : never;
+};
+
+export function withVaultPathPolicy(rpc: StorageVaultRpc, policy: VaultPathPolicy): VaultRpc {
+  // Configuration is already validated; storage independently validates the wire envelope.
+  // Snapshot so callers cannot mutate policy while calls are in flight.
+  const pathPolicy = structuredClone(policy);
+  return {
+    vaultStatus: () => rpc.vaultStatus(),
+    listVaultFiles: (request) => rpc.listVaultFiles({ request, pathPolicy }),
+    searchVaultFiles: (request) => rpc.searchVaultFiles({ request, pathPolicy }),
+    listVaultAttachments: (request) => rpc.listVaultAttachments({ request, pathPolicy }),
+    getVaultFileOutline: (request) => rpc.getVaultFileOutline({ request, pathPolicy }),
+    readVaultFile: (request) => rpc.readVaultFile({ request, pathPolicy }),
+    readVaultAttachment: (request) => rpc.readVaultAttachment({ request, pathPolicy }),
+    readVaultFrontmatter: (request) => rpc.readVaultFrontmatter({ request, pathPolicy }),
+    createVaultFile: (request) => rpc.createVaultFile({ request, pathPolicy }),
+    updateVaultFile: (request) => rpc.updateVaultFile({ request, pathPolicy }),
+    appendVaultFile: (request) => rpc.appendVaultFile({ request, pathPolicy }),
+    patchVaultFile: (request) => rpc.patchVaultFile({ request, pathPolicy }),
+    patchVaultFrontmatter: (request) => rpc.patchVaultFrontmatter({ request, pathPolicy }),
+    deleteVaultFile: (request) => rpc.deleteVaultFile({ request, pathPolicy }),
+  };
 }
 
 function unavailableRpc(): VaultRpc {
@@ -84,5 +116,8 @@ function unavailableRpc(): VaultRpc {
  */
 export function vaultRpcForEnv(env: VaultRpcEnv): VaultRpc {
   if (!isVaultDatabaseName(env.VAULT_DATABASE)) return unavailableRpc();
-  return env.POUCH_DATABASES.getByName(env.VAULT_DATABASE) as unknown as VaultRpc;
+  const pathPolicy = pathPolicyForEnv(env);
+  // Wrangler cannot infer methods on a namespace exported by another Worker.
+  const storage = env.POUCH_DATABASES.getByName(env.VAULT_DATABASE) as StorageVaultRpc;
+  return withVaultPathPolicy(storage, pathPolicy);
 }

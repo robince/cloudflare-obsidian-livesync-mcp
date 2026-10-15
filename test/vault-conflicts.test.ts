@@ -1,3 +1,4 @@
+import { rpcRequest } from './vault-policy-helpers';
 import { describe, expect, it } from 'vitest';
 import { runInDurableObject } from 'cloudflare:test';
 import type { PouchDatabase } from '../src/pouch-database';
@@ -7,12 +8,12 @@ describe('LiveSync revision-tree conflicts', () => {
   it('reports conflicts on reads/frontmatter/listings without changing any leaf', async () => {
     const { stub, path, tree } = await conflictVault();
     const before = await tree();
-    for (const read of [stub.readVaultFile({ path }), stub.readVaultFrontmatter({ path })]) {
+    for (const read of [stub.readVaultFile(rpcRequest({ path })), stub.readVaultFrontmatter(rpcRequest({ path }))]) {
       expect(await read).toMatchObject({ ok: false, error: {
         code: 'livesync_conflict', path, unresolvedVersions: 2, resolution: 'obsidian',
       } });
     }
-    expect(await stub.listVaultFiles({})).toMatchObject({ ok: true, data: {
+    expect(await stub.listVaultFiles(rpcRequest({}))).toMatchObject({ ok: true, data: {
       files: [expect.objectContaining({ path, unresolvedVersions: 2 })],
     } });
     expect(await tree()).toEqual(before);
@@ -20,13 +21,13 @@ describe('LiveSync revision-tree conflicts', () => {
 
   it('uses Commonlib to merge without applying the triggering mutation', async () => {
     const { stub, path, tree } = await conflictVault();
-    expect(await stub.appendVaultFile({ path, expectedRevision: '2-b', content: 'NEVER' }))
+    expect(await stub.appendVaultFile(rpcRequest({ path, expectedRevision: '2-b', content: 'NEVER' })))
       .toMatchObject({ ok: false, error: { code: 'conflict_reconciled', path, resolution: 'reread_and_reassess' } });
     expect(await tree()).toHaveLength(1);
-    const read = await stub.readVaultFile({ path });
+    const read = await stub.readVaultFile(rpcRequest({ path }));
     expect(read).toMatchObject({ ok: true, data: { content: 'A\nbase\nB\n' } });
     if (!read.ok) return;
-    expect(await stub.appendVaultFile({ path, expectedRevision: read.data.revision, content: ' deliberate' }))
+    expect(await stub.appendVaultFile(rpcRequest({ path, expectedRevision: read.data.revision, content: ' deliberate' })))
       .toMatchObject({ ok: true });
   });
 
@@ -40,9 +41,9 @@ describe('LiveSync revision-tree conflicts', () => {
     const { stub, path, tree } = await conflictVault(options);
     const before = await tree();
     for (const call of [
-      () => stub.updateVaultFile({ path, expectedRevision: '2-b', content: 'NEVER' }),
-      () => stub.deleteVaultFile({ path, expectedRevision: '2-b' }),
-      () => stub.createVaultFile({ path, content: 'NEVER' }),
+      () => stub.updateVaultFile(rpcRequest({ path, expectedRevision: '2-b', content: 'NEVER' })),
+      () => stub.deleteVaultFile(rpcRequest({ path, expectedRevision: '2-b' })),
+      () => stub.createVaultFile(rpcRequest({ path, content: 'NEVER' })),
     ]) {
       expect(await call()).toMatchObject({ ok: false, error: { code: 'livesync_conflict', resolution: 'obsidian' } });
       expect(await tree()).toEqual(before);
@@ -51,20 +52,20 @@ describe('LiveSync revision-tree conflicts', () => {
 
   it('collapses identical bytes with the host duplicate policy and no synthesized content', async () => {
     const { stub, path, tree } = await conflictVault({ leaves: ['same', 'same'] });
-    expect(await stub.deleteVaultFile({ path, expectedRevision: '2-b' }))
+    expect(await stub.deleteVaultFile(rpcRequest({ path, expectedRevision: '2-b' })))
       .toMatchObject({ ok: false, error: { code: 'conflict_reconciled' } });
     expect(await tree()).toMatchObject([{ _rev: '2-b' }]);
-    expect(await stub.readVaultFile({ path })).toMatchObject({ ok: true, data: { content: 'same' } });
+    expect(await stub.readVaultFile(rpcRequest({ path }))).toMatchObject({ ok: true, data: { content: 'same' } });
   });
 
   it('makes partial pairwise progress and stops before a manual pair', async () => {
     const { stub, path, tree } = await conflictVault({ leaves: ['A\nbase\nend\n', 'X\nbase\nB\n', 'start\nbase\nB\n'] });
-    expect(await stub.deleteVaultFile({ path, expectedRevision: '2-c' }))
+    expect(await stub.deleteVaultFile(rpcRequest({ path, expectedRevision: '2-c' })))
       .toMatchObject({ ok: false, error: { code: 'conflict_reconciled', unresolvedVersions: 2 } });
     const after = await tree();
     expect(after).toHaveLength(2);
     expect(after.some(doc => doc._rev === '2-b')).toBe(true);
-    expect(await stub.deleteVaultFile({ path, expectedRevision: '2-c' }))
+    expect(await stub.deleteVaultFile(rpcRequest({ path, expectedRevision: '2-c' })))
       .toMatchObject({ ok: false, error: { code: 'livesync_conflict' } });
     expect(await tree()).toEqual(after);
   });
@@ -72,8 +73,8 @@ describe('LiveSync revision-tree conflicts', () => {
   it('reports differing binary versions without applying newer-mtime policy', async () => {
     const { stub, path, tree } = await conflictVault({ path: 'assets/image.png', binary: true, leaves: ['AA==', 'AQ=='] });
     const before = await tree();
-    expect(await stub.readVaultAttachment({ path })).toMatchObject({ ok: false, error: { code: 'livesync_conflict' } });
-    expect(await stub.listVaultAttachments({})).toMatchObject({ ok: true, data: {
+    expect(await stub.readVaultAttachment(rpcRequest({ path }))).toMatchObject({ ok: false, error: { code: 'livesync_conflict' } });
+    expect(await stub.listVaultAttachments(rpcRequest({}))).toMatchObject({ ok: true, data: {
       attachments: [expect.objectContaining({ path, unresolvedVersions: 2 })],
     } });
     expect(await tree()).toEqual(before);
@@ -92,7 +93,7 @@ describe('LiveSync revision-tree conflicts', () => {
         }
         return original(request);
       };
-      try { return await instance.deleteVaultFile({ path, expectedRevision: '2-b' }); }
+      try { return await instance.deleteVaultFile(rpcRequest({ path, expectedRevision: '2-b' })); }
       finally { instance.fetch = original; }
     });
     expect(result).toMatchObject({ ok: false, error: { code: 'conflict_reconciled' } });
@@ -101,7 +102,7 @@ describe('LiveSync revision-tree conflicts', () => {
 
   it('bounds pairwise work and preserves the remaining duplicate leaves', async () => {
     const { stub, path, tree } = await conflictVault({ leaves: Array(10).fill('same') });
-    expect(await stub.deleteVaultFile({ path, expectedRevision: '2-j' }))
+    expect(await stub.deleteVaultFile(rpcRequest({ path, expectedRevision: '2-j' })))
       .toMatchObject({ ok: false, error: { code: 'conflict_reconciled', unresolvedVersions: 2 } });
     expect(await tree()).toHaveLength(2);
   });
@@ -119,7 +120,7 @@ describe('LiveSync revision-tree conflicts', () => {
         }
         return original(request);
       };
-      try { return await instance.deleteVaultFile({ path, expectedRevision: '2-b' }); }
+      try { return await instance.deleteVaultFile(rpcRequest({ path, expectedRevision: '2-b' })); }
       finally { instance.fetch = original; }
     });
     expect(result).toMatchObject({ ok: false, error: { code: 'livesync_conflict' } });

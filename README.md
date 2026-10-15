@@ -154,12 +154,18 @@ write access, and do not override your explicit requests.
    | `VAULT_DATABASE` | Your synced database name |
    | `GITHUB_ALLOWED_USER_IDS` | Your numeric GitHub account ID, not username |
    | `MCP_WRITES_ENABLED` | `false` for read-only access; `true` to allow writes |
+   | `MCP_PATH_RULES` | Required: JSON folder rules, or `"[]"` for no folder restrictions (path validation still applies) |
+   | `MCP_HIDE_DOT_FOLDERS` | Optional: `true` to hide dot-folders; defaults to `false` |
 
    To find your account ID in a browser, open
    [the GitHub users API](https://api.github.com/users/YOUR_USERNAME), replacing
    `YOUR_USERNAME` in the URL with your GitHub username. Check that `login`
    matches your account and copy the number in `id` (not `node_id`).
    If you renamed the sync Worker, update `POUCH_DATABASES.script_name` too.
+   Missing or invalid `MCP_PATH_RULES` disables MCP access. See
+   [folder access rules](apps/cloudflare-obsidian-mcp/README.md#folder-access-policy)
+   for hidden/read-only folders and path-validation limits. Standard Obsidian
+   sync is unaffected.
 4. Copy `apps/cloudflare-obsidian-mcp/.dev.vars.example` to `.dev.vars` in that
    same directory and set `GITHUB_CLIENT_SECRET`. From the repository root:
 

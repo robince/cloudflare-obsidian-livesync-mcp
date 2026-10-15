@@ -1,3 +1,4 @@
+import { pathPolicyForEnv, PathPolicyConfigurationError } from './path-policy';
 import {
   AuthorizationError,
   OAuthProvider,
@@ -331,7 +332,7 @@ function consentPage(authorizationId: string, csrf: string, clientName: string, 
   const access = scopes.includes(WRITE_SCOPE)
     ? 'list, search, and read Markdown files and attachments; create, edit, and delete Markdown files'
     : 'list, search, and read Markdown files and attachments';
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>Client-provided name: ${escapeHtml(clientName)}. This name alone does not verify the client.</p><p>Client ID: ${escapeHtml(clientId)}</p><p>Redirect destination: ${escapeHtml(redirectUri)}</p><p>Only continue if you recognize this destination. A localhost destination does not identify the application listening there.</p><p>Vault: ${escapeHtml(vault)}. Requested access: ${access}.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize vault access</title><body><main><h1>Authorize vault access</h1><p>Client-provided name: ${escapeHtml(clientName)}. This name alone does not verify the client.</p><p>Client ID: ${escapeHtml(clientId)}</p><p>Redirect destination: ${escapeHtml(redirectUri)}</p><p>Only continue if you recognize this destination. A localhost destination does not identify the application listening there.</p><p>Vault: ${escapeHtml(vault)}. Requested access: ${access}. Server-configured folder restrictions also apply.</p><form method="post" action="/authorize/consent"><input type="hidden" name="authorization_id" value="${escapeHtml(authorizationId)}"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button type="submit">Continue with GitHub</button></form></main></body></html>`;
 }
 
 function htmlResponse(body: string, setCookie: string, clientOrigin: string): Response {
@@ -356,8 +357,12 @@ export default {
       if (!isCanonicalRequest(request, env)) {
         return Promise.resolve(new Response('Invalid host.', { status: 400 }));
       }
+      pathPolicyForEnv(env);
       return providerFor(env).fetch(request, env, ctx);
     } catch (error) {
+      if (error instanceof PathPolicyConfigurationError) {
+        return Promise.resolve(new Response(error.message, { status: 500 }));
+      }
       if (error instanceof ConfigurationError) {
         return Promise.resolve(new Response('MCP_PUBLIC_BASE_URL is invalid.', { status: 500 }));
       }

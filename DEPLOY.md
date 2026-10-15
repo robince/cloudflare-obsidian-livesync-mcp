@@ -232,6 +232,25 @@ Do not overwrite existing deployment files by copying the templates again.
 
 ## Deploy the MCP Worker
 
+**Upgrading to semantic contract 6:** add `MCP_PATH_RULES` to every MCP environment
+in your existing ignored deployment copy before deploying. Set a JSON array of
+folder rules or explicitly the JSON string `"[]"` for no folder restrictions
+(MCP path validation still applies). Missing
+or invalid configuration disables MCP and logs the variable name to Worker logs;
+it does not affect Obsidian sync. `MCP_HIDE_DOT_FOLDERS="true"` is recommended for
+new installations; its default is false. See [folder access policy](apps/cloudflare-obsidian-mcp/README.md#folder-access-policy)
+for matching rules, read-only folders, privacy boundaries and local examples.
+
+Deploy both Workers together using `npm run deploy` (storage first, then MCP).
+A brief MCP incompatibility window is acceptable; standard Obsidian/CouchDB sync
+remains unchanged. The derived search index rebuilds on first search after the
+upgrade without modifying vault documents; retry while it catches up. Check a
+visible note, a hidden note, a read-only note and an attachment after deployment,
+and confirm Obsidian still syncs the restricted folders. Use disposable staging
+notes for mutation checks. Roll back both Workers coherently or disable MCP until
+they match; do not add unrestricted legacy RPC fallbacks.
+
+
 The MCP Worker connects directly to the storage Worker's Durable Object. It
 does not need the CouchDB URL or password. Before its first deployment:
 
@@ -246,7 +265,8 @@ does not need the CouchDB URL or password. Before its first deployment:
    ```
 
    Set its non-secret `vars`: `GITHUB_CLIENT_ID`, `VAULT_DATABASE`,
-   `MCP_PUBLIC_BASE_URL`, `GITHUB_ALLOWED_USER_IDS`, and `MCP_WRITES_ENABLED`.
+   `MCP_PUBLIC_BASE_URL`, `GITHUB_ALLOWED_USER_IDS`, `MCP_WRITES_ENABLED`,
+   `MCP_PATH_RULES`, and optionally `MCP_HIDE_DOT_FOLDERS`.
    Use `false` for an initial read-only test. If you rename the storage Worker,
    update this file's `POUCH_DATABASES` binding `script_name` to match.
 3. Copy `apps/cloudflare-obsidian-mcp/.dev.vars.example` to

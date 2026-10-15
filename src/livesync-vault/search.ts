@@ -1,3 +1,4 @@
+import { pathAccess, policyPathKey, policyKeyHasDotFolder, type VaultPathPolicy } from '@cloudflare-obsidian-livesync/contracts';
 import { diagnostic } from '../diagnostics';
 import { readUpdateSequence } from '../changes-feed';
 import { readFrontmatter } from './frontmatter';
@@ -16,7 +17,7 @@ import type { JsonObject } from '../types';
 import type { CommonlibFacade } from './commonlib';
 import type { VaultProfileInspection } from './profile';
 
-const SEARCH_SCHEMA_VERSION = '3';
+const SEARCH_SCHEMA_VERSION = '5';
 const SEARCH_CATCHUP_MS = 3_000;
 const SEARCH_CHANGES_PAGE = 100;
 
@@ -53,7 +54,7 @@ type CatchUpResult = 'ready' | 'catching_up' | { pendingPath: string };
 export class LiveSyncSearch {
   constructor(private readonly dependencies: SearchDependencies) {}
 
-  async search(request: SearchVaultFilesRequest): Promise<VaultResult<SearchVaultFilesData>> {
+  async search(request: SearchVaultFilesRequest, pathPolicy: VaultPathPolicy): Promise<VaultResult<SearchVaultFilesData>> {
     const parsed = searchVaultFilesRequestSchema.safeParse(request);
     if (!parsed.success) return failure('invalid_input', 'Invalid search request.');
     const pathPrefix = parsed.data.pathPrefix ?? '';
@@ -77,14 +78,16 @@ export class LiveSyncSearch {
           return commonlib;
         });
         if (typeof catchUp === 'object') {
-          return failure('unavailable', `Search is waiting for referenced LiveSync chunks for ${catchUp.pendingPath}. Complete replication or repair this note in Obsidian before retrying.`);
+          return failure('unavailable', pathAccess(pathPolicy, catchUp.pendingPath) === 'none'
+            ? 'Search is waiting for referenced LiveSync chunks. Complete replication or repair the vault in Obsidian before retrying.'
+            : `Search is waiting for referenced LiveSync chunks for ${catchUp.pendingPath}. Complete replication or repair this note in Obsidian before retrying.`);
         }
         if (catchUp === 'catching_up') {
           return failure('unavailable', 'Search index is catching up with LiveSync changes. Retry search_files.');
         }
         return {
           ok: true,
-          data: await this.query(parsed.data, profile.handleFilenameCaseSensitive),
+          data: await this.query(parsed.data, profile.handleFilenameCaseSensitive, pathPolicy),
         };
       } finally {
         if (commonlib) await commonlib.close();
@@ -122,6 +125,8 @@ export class LiveSyncSearch {
       doc_id TEXT NOT NULL UNIQUE,
       path TEXT NOT NULL,
       path_folded TEXT NOT NULL,
+      policy_path TEXT,
+      dot_folder INTEGER NOT NULL,
       revision TEXT NOT NULL,
       unresolved_versions INTEGER NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('indexed', 'excluded')),
@@ -248,12 +253,12 @@ export class LiveSyncSearch {
     return checkpoint >= target ? 'ready' : 'catching_up';
   }
 
-  private async query(request: SearchVaultFilesRequest, caseSensitive: boolean): Promise<SearchVaultFilesData> {
+  private async query(request: SearchVaultFilesRequest, caseSensitive: boolean, pathPolicy: VaultPathPolicy): Promise<SearchVaultFilesData> {
     const limit = request.limit ?? VAULT_LIMITS.defaultSearchLimit;
     const query = request.query?.trim();
     const pathPrefix = request.pathPrefix ?? '';
     const fingerprintBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({
-      query, pathPrefix, filters: request.filters ?? [], properties: request.properties ?? [], caseSensitive,
+      query, pathPrefix, filters: request.filters ?? [], properties: request.properties ?? [], caseSensitive, pathPolicy,
     })));
     const fingerprint = Array.from(new Uint8Array(fingerprintBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
     const generation = this.state('generation')!;
@@ -272,8 +277,9 @@ export class LiveSyncSearch {
       }
       offset = cursor.offset;
     }
-    const predicates: string[] = ["d.status='indexed'"];
-    const bindings: (string | number | null)[] = [];
+    const visibility = visibilityPredicate(pathPolicy);
+    const predicates: string[] = ["d.status='indexed'", visibility.sql];
+    const bindings: (string | number | null)[] = [...visibility.bindings];
     if (query) {
       predicates.push('livesync_search_fts MATCH ?');
       bindings.push(query.split(/\s+/u).map((term) => `"${term.replaceAll('"', '""')}"`).join(' '));
@@ -299,7 +305,8 @@ export class LiveSyncSearch {
       ...bindings, limit + 1, offset,
     ).toArray();
     const counts = this.dependencies.storage.sql.exec<{ excluded: number; invalid: number }>(
-      "SELECT COALESCE(SUM(status='excluded'),0) AS excluded, COALESCE(SUM(status='indexed' AND properties_valid=0),0) AS invalid FROM livesync_search_documents",
+      `SELECT COALESCE(SUM(status='excluded'),0) AS excluded, COALESCE(SUM(status='indexed' AND properties_valid=0),0) AS invalid FROM livesync_search_documents d WHERE ${visibility.sql}`,
+      ...visibility.bindings,
     ).one();
     const results: SearchVaultFilesData['results'] = [];
     const makeResponse = (more: boolean): SearchVaultFilesData => ({
@@ -406,16 +413,20 @@ export class LiveSyncSearch {
     status: 'indexed' | 'excluded',
     reason?: string,
   ): number {
+    const policyKey = policyPathKey(path);
+    const dotFolder = Number(policyKey !== undefined && policyKeyHasDotFolder(policyKey));
     const existing = this.dependencies.storage.sql
       .exec<{ fts_rowid: number }>('SELECT fts_rowid FROM livesync_search_documents WHERE doc_id=?', documentId)
       .toArray()[0];
     if (existing) {
       this.dependencies.storage.sql.exec(
         `UPDATE livesync_search_documents
-            SET path=?, path_folded=?, revision=?, unresolved_versions=?, status=?, exclusion_reason=?
+            SET path=?, path_folded=?, policy_path=?, dot_folder=?, revision=?, unresolved_versions=?, status=?, exclusion_reason=?
           WHERE doc_id=?`,
         path,
         path.toLowerCase(),
+        policyKey ?? null,
+        dotFolder,
         revision,
         unresolvedVersions,
         status,
@@ -426,11 +437,13 @@ export class LiveSyncSearch {
     }
     return this.dependencies.storage.sql.exec<{ fts_rowid: number }>(
       `INSERT INTO livesync_search_documents
-        (doc_id, path, path_folded, revision, unresolved_versions, status, exclusion_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING fts_rowid`,
+        (doc_id, path, path_folded, policy_path, dot_folder, revision, unresolved_versions, status, exclusion_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING fts_rowid`,
       documentId,
       path,
       path.toLowerCase(),
+      policyKey ?? null,
+      dotFolder,
       revision,
       unresolvedVersions,
       status,
@@ -523,4 +536,20 @@ function truncateUtf8(value: string, maximumBytes: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** SQL equivalent of pathAccess !== 'none', applied before LIMIT/OFFSET.
+ * Keep in parity with the integration matrix in vault-path-policy.test.ts.
+ * Literal prefix predicates: %, _ and quotes are never SQL patterns.
+ */
+function visibilityPredicate(policy: VaultPathPolicy): { sql: string; bindings: string[] } {
+  const predicates = ['d.policy_path IS NOT NULL'];
+  const bindings: string[] = [];
+  if (policy.hideDotFolders) predicates.push('d.dot_folder=0');
+  for (const rule of policy.rules) {
+    if (rule.access !== 'none') continue;
+    predicates.push('instr(d.policy_path, ?)<>1');
+    bindings.push(rule.path);
+  }
+  return { sql: predicates.join(' AND '), bindings };
 }
